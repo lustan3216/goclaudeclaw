@@ -1,0 +1,17 @@
+{
+  "name": "goclaudeclaw",
+  "version": "0.1.0",
+  "description": "Claude Code on your phone — Telegram bot daemon with topics, multi-bot, auto subagent",
+  "bin": {
+    "goclaudeclaw": "./bin/goclaudeclaw-wrapper.sh"
+  },
+  "scripts": {
+    "postinstall": "sh install.sh"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/lustan3216/goclaudeclaw"
+  },
+  "keywords": ["claude", "telegram", "bot", "claudeclaw", "claude-code"],
+  "license": "MIT"
+}

@@ -24,11 +24,20 @@ One binary. No Node, no Bun, no runtime to babysit.
 
 ## Install
 
-```bash
-go install github.com/lustan3216/goclaudeclaw@latest
+**One line:**
+```sh
+curl -fsSL https://raw.githubusercontent.com/lustan3216/goclaudeclaw/main/install.sh | sh
 ```
 
-That's it. The binary lands in your `$GOPATH/bin`.
+**Or with Go:**
+```sh
+go install github.com/lustan3216/goclaudeclaw/cmd/goclaudeclaw@latest
+```
+
+**Or as Claude Code plugin (coming soon):**
+```sh
+claude plugin install lustan3216/goclaudeclaw
+```
 
 ---
 
