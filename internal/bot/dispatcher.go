@@ -11,7 +11,7 @@ import (
 	"sync"
 	"time"
 
-	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
+	"github.com/mymmrac/telego"
 
 	"github.com/lustan3216/goclaudeclaw/internal/config"
 	"github.com/lustan3216/goclaudeclaw/internal/runner"
@@ -51,13 +51,13 @@ type Dispatcher struct {
 	classifier *runner.Classifier
 	cfg        *config.Config
 	botCfg     config.BotConfig
-	botAPI     *tgbotapi.BotAPI
+	botAPI     *telego.Bot
 	workspace  string
 }
 
 // NewDispatcher 创建消息分发器。
 func NewDispatcher(
-	botAPI *tgbotapi.BotAPI,
+	botAPI *telego.Bot,
 	botCfg config.BotConfig,
 	cfg *config.Config,
 	runnerMgr *runner.Manager,
@@ -85,18 +85,20 @@ func (d *Dispatcher) UpdateConfig(cfg *config.Config, botCfg config.BotConfig) {
 }
 
 // Handle 接收来自 Telegram 的单条消息，进入防抖队列。
-func (d *Dispatcher) Handle(ctx context.Context, update tgbotapi.Update) {
+func (d *Dispatcher) Handle(ctx context.Context, update telego.Update) {
 	if update.Message == nil {
 		return
 	}
 	msg := update.Message
 
 	// 鉴权：只处理 allowed_users 中的用户
-	if !d.isAllowed(msg.From.ID) {
-		slog.Warn("拒绝未授权用户",
-			"user_id", msg.From.ID,
-			"username", msg.From.UserName,
-			"bot", d.botCfg.Name)
+	if msg.From == nil || !d.isAllowed(msg.From.ID) {
+		if msg.From != nil {
+			slog.Warn("拒绝未授权用户",
+				"user_id", msg.From.ID,
+				"username", msg.From.Username,
+				"bot", d.botCfg.Name)
+		}
 		return
 	}
 
@@ -135,9 +137,9 @@ func (d *Dispatcher) Handle(ctx context.Context, update tgbotapi.Update) {
 		return
 	}
 
-	// 处理内置命令
-	if msg.IsCommand() {
-		d.handleCommand(ctx, msg, topicID)
+	// 处理内置命令（telego 没有 IsCommand/Command 方法，手动检测）
+	if cmd, args, ok := parseCommand(msg); ok {
+		d.handleCommand(ctx, msg, topicID, cmd, args)
 		return
 	}
 
@@ -148,17 +150,40 @@ func (d *Dispatcher) Handle(ctx context.Context, update tgbotapi.Update) {
 
 	d.enqueueWithDebounce(ctx, chatTopicKey{msg.Chat.ID, topicID}, incomingMsg{
 		text:       text,
-		from:       msg.From.UserName,
+		from:       msg.From.Username,
 		chatID:     msg.Chat.ID,
 		topicID:    topicID,
 		receivedAt: time.Now(),
 	})
 }
 
-// handleCommand 处理 /start /help /clear /status 等内置命令。
-func (d *Dispatcher) handleCommand(ctx context.Context, msg *tgbotapi.Message, topicID int) {
+// parseCommand 检测消息是否为 bot 命令。
+// 返回命令名称（不含斜杠）、参数字符串，以及是否为命令的布尔值。
+// telego 不提供 IsCommand/Command 辅助方法，需手动解析 Entities。
+func parseCommand(msg *telego.Message) (cmd string, args string, ok bool) {
+	if !strings.HasPrefix(msg.Text, "/") {
+		return "", "", false
+	}
+	// 确认第一个 entity 类型为 bot_command
+	for _, e := range msg.Entities {
+		if e.Type == telego.EntityTypeBotCommand && e.Offset == 0 {
+			// 截取命令部分，例如 "/clear@botname" → "clear"
+			cmdFull := msg.Text[1:e.Length] // 去掉前缀 "/"
+			if at := strings.IndexByte(cmdFull, '@'); at >= 0 {
+				cmdFull = cmdFull[:at]
+			}
+			// 参数为命令后的剩余文本（去除首尾空白）
+			rest := strings.TrimSpace(msg.Text[e.Length:])
+			return cmdFull, rest, true
+		}
+	}
+	return "", "", false
+}
+
+// handleCommand 处理 /start /help /clear /status /bg 等内置命令。
+func (d *Dispatcher) handleCommand(ctx context.Context, msg *telego.Message, topicID int, cmd string, args string) {
 	chatID := msg.Chat.ID
-	switch msg.Command() {
+	switch cmd {
 	case "start", "help":
 		d.reply(chatID, topicID, "👋 goclaudeclaw 已就绪\n\n"+
 			"发送任意消息即可与 Claude 对话。\n"+
@@ -184,12 +209,11 @@ func (d *Dispatcher) handleCommand(ctx context.Context, msg *tgbotapi.Message, t
 		))
 	case "bg":
 		// 强制后台模式
-		prompt := msg.CommandArguments()
-		if prompt == "" {
+		if args == "" {
 			d.reply(chatID, topicID, "用法: /bg <任务描述>")
 			return
 		}
-		d.dispatchJob(ctx, chatID, topicID, prompt, runner.ModeBackground)
+		d.dispatchJob(ctx, chatID, topicID, args, runner.ModeBackground)
 	default:
 		d.reply(chatID, topicID, "未知命令，发送 /help 查看帮助。")
 	}
@@ -323,13 +347,16 @@ func (d *Dispatcher) sendOutput(chatID int64, topicID int, output string) {
 
 // reply 向指定 chat（可选 topic）发送文本消息，错误只记录日志不抛出。
 func (d *Dispatcher) reply(chatID int64, topicID int, text string) {
-	msg := tgbotapi.NewMessage(chatID, text)
-	msg.ParseMode = tgbotapi.ModeMarkdown
+	params := &telego.SendMessageParams{
+		ChatID:    telego.ChatID{ID: chatID},
+		Text:      text,
+		ParseMode: telego.ModeMarkdown,
+	}
 	// 若在 topic 内，将回复发到同一 topic 线程
 	if topicID > 0 {
-		msg.MessageThreadID = topicID
+		params.MessageThreadID = topicID
 	}
-	if _, err := d.botAPI.Send(msg); err != nil {
+	if _, err := d.botAPI.SendMessage(params); err != nil {
 		slog.Error("发送 Telegram 消息失败",
 			"chat_id", chatID,
 			"topic_id", topicID,

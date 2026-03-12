@@ -8,7 +8,7 @@ import (
 	"sync"
 	"time"
 
-	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
+	"github.com/mymmrac/telego"
 
 	"github.com/lustan3216/goclaudeclaw/internal/config"
 	"github.com/lustan3216/goclaudeclaw/internal/runner"
@@ -17,7 +17,7 @@ import (
 
 // Bot 封装单个 Telegram bot 的生命周期。
 type Bot struct {
-	api        *tgbotapi.BotAPI
+	api        *telego.Bot
 	cfg        config.BotConfig
 	dispatcher *Dispatcher
 }
@@ -30,22 +30,25 @@ func NewBot(
 	sessionMgr *session.Manager,
 	workspace string,
 ) (*Bot, error) {
-	api, err := tgbotapi.NewBotAPI(botCfg.Token)
+	api, err := telego.NewBot(botCfg.Token)
+	if err != nil {
+		return nil, err
+	}
+
+	// 获取 bot 自身信息（用于填充 username）
+	self, err := api.GetMe()
 	if err != nil {
 		return nil, err
 	}
 
 	// 若 bot 配置未设置 name，使用 Telegram 返回的 username 作为默认值
 	if botCfg.Name == "" {
-		botCfg.Name = api.Self.UserName
+		botCfg.Name = self.Username
 	}
-
-	// 生产环境关闭调试日志，避免 token 泄漏
-	api.Debug = false
 
 	slog.Info("Telegram bot 已连接",
 		"bot_name", botCfg.Name,
-		"username", api.Self.UserName)
+		"username", self.Username)
 
 	dispatcher := NewDispatcher(api, botCfg, globalCfg, runnerMgr, sessionMgr, workspace)
 
@@ -73,32 +76,27 @@ func (b *Bot) UpdateConfig(cfg *config.Config) {
 func (b *Bot) Run(ctx context.Context) {
 	slog.Info("启动 bot 长轮询", "bot", b.cfg.Name)
 
-	u := tgbotapi.NewUpdate(0)
-	u.Timeout = 60 // Telegram 长轮询超时（秒），网络空闲时保持连接
-
-	updates := b.api.GetUpdatesChan(u)
+	updates, err := b.api.UpdatesViaLongPolling(nil,
+		telego.WithLongPollingContext(ctx),
+		telego.WithLongPollingRetryTimeout(3*time.Second),
+	)
+	if err != nil {
+		slog.Error("启动长轮询失败", "bot", b.cfg.Name, "err", err)
+		return
+	}
+	defer b.api.StopLongPolling()
 
 	for {
 		select {
 		case <-ctx.Done():
 			slog.Info("bot 收到停止信号，退出长轮询", "bot", b.cfg.Name)
-			b.api.StopReceivingUpdates()
 			return
 
 		case update, ok := <-updates:
 			if !ok {
-				// channel 被关闭，尝试重连
-				slog.Warn("更新 channel 已关闭，3 秒后重连", "bot", b.cfg.Name)
-				select {
-				case <-ctx.Done():
-					return
-				case <-time.After(3 * time.Second):
-					updates = b.reconnect(ctx)
-					if updates == nil {
-						return // ctx 已取消
-					}
-				}
-				continue
+				// channel 被关闭（ctx 已取消或连接断开）
+				slog.Warn("更新 channel 已关闭，bot 退出", "bot", b.cfg.Name)
+				return
 			}
 
 			// 在独立 goroutine 处理，防止单条消息处理慢影响轮询
@@ -106,22 +104,6 @@ func (b *Bot) Run(ctx context.Context) {
 			go b.dispatcher.Handle(ctx, update)
 		}
 	}
-}
-
-// reconnect 重新建立 Telegram 更新 channel，带指数退避重试。
-// 返回新 channel，如果 ctx 被取消则返回 nil。
-func (b *Bot) reconnect(ctx context.Context) tgbotapi.UpdatesChannel {
-	select {
-	case <-ctx.Done():
-		return nil
-	default:
-	}
-
-	u := tgbotapi.NewUpdate(0)
-	u.Timeout = 60
-	updates := b.api.GetUpdatesChan(u)
-	slog.Info("bot 重连成功", "bot", b.cfg.Name)
-	return updates
 }
 
 // Manager 管理所有 bot 实例的生命周期。
