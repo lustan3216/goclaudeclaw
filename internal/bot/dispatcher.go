@@ -125,6 +125,12 @@ func (d *Dispatcher) UpdateConfig(cfg *config.Config, botCfg config.BotConfig) {
 
 // Handle 接收来自 Telegram 的单条消息，进入防抖队列。
 func (d *Dispatcher) Handle(ctx context.Context, update telego.Update) {
+	// 处理 inline button 回调（取消任务按钮）
+	if update.CallbackQuery != nil {
+		d.handleCallback(update.CallbackQuery)
+		return
+	}
+
 	if update.Message == nil {
 		return
 	}
@@ -791,9 +797,9 @@ func (d *Dispatcher) dispatchJob(ctx context.Context, chatID int64, topicID int,
 		jobCancel()
 	}
 
-	// 后台任务：立即回复用户，异步执行
+	// 后台任务：立即回复用户（含取消按钮），异步执行
 	if mode == runner.ModeBackground {
-		d.replyTo(chatID, topicID, replyToID, fmt.Sprintf("⏳ 已在后台处理（#%d），完成后通知你。用 /stop %d 可取消。", jobID, jobID))
+		btnMsgID := d.sendCancelButton(chatID, topicID, replyToID, jobID, "⏳ 后台处理中，完成后通知你。")
 
 		resultCh := make(chan runner.Result, 1)
 		d.runnerMgr.Submit(runner.Job{
@@ -810,6 +816,7 @@ func (d *Dispatcher) dispatchJob(ctx context.Context, chatID int64, topicID int,
 		go func() {
 			defer cleanup()
 			result := <-resultCh
+			d.removeInlineKeyboard(chatID, btnMsgID) // 任务结束后移除按钮
 			if result.Err != nil {
 				if jobCtx.Err() != nil {
 					d.replyTo(chatID, topicID, replyToID, "🛑 已取消")
@@ -1125,6 +1132,82 @@ func (d *Dispatcher) sendOutputWithThinking(chatID int64, topicID int, thinkingM
 			d.reply(chatID, topicID, string(chunk))
 		}
 	}
+}
+
+// handleCallback 处理 inline button 回调（目前仅支持 cancel:<jobID>）。
+func (d *Dispatcher) handleCallback(cb *telego.CallbackQuery) {
+	ack := func(text string) {
+		_ = d.botAPI.AnswerCallbackQuery(&telego.AnswerCallbackQueryParams{
+			CallbackQueryID: cb.ID,
+			Text:            text,
+		})
+	}
+	if !strings.HasPrefix(cb.Data, "cancel:") {
+		ack("")
+		return
+	}
+	id, err := strconv.ParseInt(strings.TrimPrefix(cb.Data, "cancel:"), 10, 64)
+	if err != nil {
+		ack("无效 ID")
+		return
+	}
+	d.cancelMu.Lock()
+	e, ok := d.jobMap[id]
+	if ok {
+		delete(d.jobMap, id)
+		e.cancel()
+	}
+	d.cancelMu.Unlock()
+
+	if ok {
+		ack(fmt.Sprintf("🛑 任务 #%d 已取消", id))
+		// 移除按钮，避免重复点击
+		if cb.Message != nil {
+			_, _ = d.botAPI.EditMessageReplyMarkup(&telego.EditMessageReplyMarkupParams{
+				ChatID:    telego.ChatID{ID: cb.Message.GetChat().ID},
+				MessageID: cb.Message.GetMessageID(),
+			})
+		}
+	} else {
+		ack(fmt.Sprintf("任务 #%d 不存在（可能已完成）", id))
+	}
+}
+
+// sendCancelButton 发送带「取消」inline button 的消息，返回发出的消息 ID。
+func (d *Dispatcher) sendCancelButton(chatID int64, topicID int, replyToID int, jobID int64, text string) int {
+	params := &telego.SendMessageParams{
+		ChatID:    telego.ChatID{ID: chatID},
+		Text:      text,
+		ParseMode: telego.ModeMarkdown,
+		ReplyMarkup: &telego.InlineKeyboardMarkup{
+			InlineKeyboard: [][]telego.InlineKeyboardButton{
+				{{Text: "🛑 取消", CallbackData: fmt.Sprintf("cancel:%d", jobID)}},
+			},
+		},
+	}
+	if topicID > 0 {
+		params.MessageThreadID = topicID
+	}
+	if replyToID > 0 {
+		params.ReplyParameters = &telego.ReplyParameters{MessageID: replyToID}
+	}
+	sent, err := d.botAPI.SendMessage(params)
+	if err != nil {
+		slog.Warn("sendCancelButton 失败", "err", err)
+		return 0
+	}
+	return sent.MessageID
+}
+
+// removeInlineKeyboard 移除指定消息的 inline keyboard（任务完成后调用）。
+func (d *Dispatcher) removeInlineKeyboard(chatID int64, msgID int) {
+	if msgID <= 0 {
+		return
+	}
+	_, _ = d.botAPI.EditMessageReplyMarkup(&telego.EditMessageReplyMarkupParams{
+		ChatID:    telego.ChatID{ID: chatID},
+		MessageID: msgID,
+	})
 }
 
 // replyTo 回复指定消息（quote），若 replyToID <= 0 则退化为普通发送。
