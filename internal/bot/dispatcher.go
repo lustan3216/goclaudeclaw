@@ -6,7 +6,11 @@ package bot
 import (
 	"context"
 	"fmt"
+	"io"
 	"log/slog"
+	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -143,6 +147,64 @@ func (d *Dispatcher) Handle(ctx context.Context, update telego.Update) {
 	// 处理内置命令（telego 没有 IsCommand/Command 方法，手动检测）
 	if cmd, args, ok := parseCommand(msg); ok {
 		d.handleCommand(ctx, msg, topicID, cmd, args)
+		return
+	}
+
+	// 处理图片消息：取最高分辨率的 PhotoSize
+	if len(msg.Photo) > 0 {
+		photo := msg.Photo[len(msg.Photo)-1] // 最后一项分辨率最高
+		savedPath, err := d.downloadTelegramFile(photo.FileID, msg.Chat.ID, "photo.jpg")
+		if err != nil {
+			slog.Error("下载图片失败", "err", err, "chat_id", msg.Chat.ID)
+			d.reply(msg.Chat.ID, topicID, fmt.Sprintf("❌ 图片下载失败: %v", err))
+			return
+		}
+		caption := strings.TrimSpace(msg.Caption)
+		text := fmt.Sprintf("[用户发送了图片: %s]", savedPath)
+		if caption != "" {
+			text += "\n" + caption
+		}
+		d.enqueueWithDebounce(ctx, chatTopicKey{msg.Chat.ID, topicID}, incomingMsg{
+			text:       text,
+			from:       msg.From.Username,
+			chatID:     msg.Chat.ID,
+			topicID:    topicID,
+			messageID:  msg.MessageID,
+			receivedAt: time.Now(),
+		})
+		return
+	}
+
+	// 处理文件消息（PDF、文档等通用文件）
+	if msg.Document != nil {
+		doc := msg.Document
+		filename := doc.FileName
+		if filename == "" {
+			filename = doc.FileUniqueID // 无原始文件名时用 unique ID 代替
+		}
+		savedPath, err := d.downloadTelegramFile(doc.FileID, msg.Chat.ID, filename)
+		if err != nil {
+			slog.Error("下载文件失败", "err", err, "chat_id", msg.Chat.ID, "filename", filename)
+			d.reply(msg.Chat.ID, topicID, fmt.Sprintf("❌ 文件下载失败: %v", err))
+			return
+		}
+		caption := strings.TrimSpace(msg.Caption)
+		mimeType := doc.MimeType
+		if mimeType == "" {
+			mimeType = "application/octet-stream"
+		}
+		text := fmt.Sprintf("[用户发送了文件: %s (%s)]", savedPath, mimeType)
+		if caption != "" {
+			text += "\n" + caption
+		}
+		d.enqueueWithDebounce(ctx, chatTopicKey{msg.Chat.ID, topicID}, incomingMsg{
+			text:       text,
+			from:       msg.From.Username,
+			chatID:     msg.Chat.ID,
+			topicID:    topicID,
+			messageID:  msg.MessageID,
+			receivedAt: time.Now(),
+		})
 		return
 	}
 
@@ -419,6 +481,67 @@ func (d *Dispatcher) isAllowed(userID int64) bool {
 		}
 	}
 	return false
+}
+
+// downloadTelegramFile 通过 Telegram Bot API 下载文件，
+// 保存到 {workspace}/.goclaudeclaw/inbox/{chatID}/{filename}，
+// 返回本地绝对路径。
+func (d *Dispatcher) downloadTelegramFile(fileID string, chatID int64, filename string) (string, error) {
+	// 第一步：向 Telegram 查询文件路径
+	file, err := d.botAPI.GetFile(&telego.GetFileParams{FileID: fileID})
+	if err != nil {
+		return "", fmt.Errorf("获取文件信息失败: %w", err)
+	}
+	if file.FilePath == "" {
+		return "", fmt.Errorf("Telegram 返回空文件路径")
+	}
+
+	// 构造下载 URL
+	downloadURL := fmt.Sprintf("https://api.telegram.org/file/bot%s/%s", d.botCfg.Token, file.FilePath)
+
+	// 第二步：创建目录 {workspace}/.goclaudeclaw/inbox/{chatID}/
+	inboxDir := filepath.Join(d.workspace, ".goclaudeclaw", "inbox", fmt.Sprintf("%d", chatID))
+	if err := os.MkdirAll(inboxDir, 0o755); err != nil {
+		return "", fmt.Errorf("创建 inbox 目录失败: %w", err)
+	}
+
+	// 目标路径：若文件名已存在则加时间戳前缀避免覆盖
+	destPath := filepath.Join(inboxDir, filename)
+	if _, statErr := os.Stat(destPath); statErr == nil {
+		// 文件已存在，加时间戳前缀
+		ts := time.Now().Format("20060102_150405_")
+		destPath = filepath.Join(inboxDir, ts+filename)
+	}
+
+	// 第三步：HTTP 下载文件内容
+	resp, err := http.Get(downloadURL) //nolint:noctx // 下载为一次性操作，无需 context
+	if err != nil {
+		return "", fmt.Errorf("HTTP 下载失败: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("Telegram 返回非 200 状态: %d", resp.StatusCode)
+	}
+
+	// 写入本地文件
+	f, err := os.Create(destPath)
+	if err != nil {
+		return "", fmt.Errorf("创建本地文件失败: %w", err)
+	}
+	defer f.Close()
+
+	if _, err := io.Copy(f, resp.Body); err != nil {
+		return "", fmt.Errorf("写入文件失败: %w", err)
+	}
+
+	slog.Info("文件已下载",
+		"chat_id", chatID,
+		"filename", filename,
+		"dest", destPath,
+		"bot", d.botCfg.Name)
+
+	return destPath, nil
 }
 
 // combineMessages 将多条消息合并为一条，按时间顺序拼接。
