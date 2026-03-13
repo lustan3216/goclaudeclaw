@@ -33,6 +33,7 @@ type Job struct {
 	TopicID   int    // Telegram topic ID（论坛话题），0 表示普通聊天
 	Prompt    string
 	Mode      TaskMode
+	MaxTurns  int        // claude --max-turns 上限，0 表示使用默认值（30）
 	ResultCh  chan<- Result // 调用方监听此 channel 获取结果
 }
 
@@ -259,7 +260,6 @@ func (m *Manager) buildArgs(job Job, sessionID string) []string {
 	args := []string{}
 
 	// 非互动模式必须跳过权限确认，否则 claude 会等待 terminal 输入而卡死。
-	// locked 模式仍需跳过（通过 system prompt 约束行为，而非 terminal 确认）。
 	args = append(args, "--dangerously-skip-permissions")
 
 	if sessionID != "" {
@@ -270,6 +270,13 @@ func (m *Manager) buildArgs(job Job, sessionID string) []string {
 		// 新会话：使用 JSON 输出格式，捕获 session_id
 		args = append(args, "--output-format", "json")
 	}
+
+	// 限制最大 agentic 轮数，防止长任务卡死；默认 30 轮
+	maxTurns := job.MaxTurns
+	if maxTurns <= 0 {
+		maxTurns = 30
+	}
+	args = append(args, "--max-turns", fmt.Sprintf("%d", maxTurns))
 
 	// 单次 prompt 模式（非交互）
 	args = append(args, "-p", job.Prompt)

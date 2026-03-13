@@ -21,6 +21,7 @@ type BotConfig struct {
 	MemoryUpdateInterval      int `mapstructure:"memory_update_interval"`      // 每 N 次成功完成后更新 memory.md，0 = 禁用
 	SessionSummarizeInterval  int `mapstructure:"session_summarize_interval"`  // 每 N 次成功完成后摘要对话并重置 session，0 = 禁用
 	MemoryCompressInterval    int `mapstructure:"memory_compress_interval"`    // 每 N 次 memory 更新后压缩 memory.md，0 = 禁用
+	MaxTurns                  int `mapstructure:"max_turns"`                   // claude --max-turns 限制，0 = 不限制（默认 30）
 }
 
 // QuietWindow 定义心跳静默时间段（本地时间）。
