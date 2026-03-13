@@ -305,6 +305,7 @@ func (d *Dispatcher) handleCommand(ctx context.Context, msg *telego.Message, top
 			"发送任意消息即可与 Claude 对话。\n"+
 			"命令:\n"+
 			"  /clear — 清除当前会话（重载 MCP）\n"+
+			"  /update — 拉取最新版本并重启\n"+
 			"  /status — 查看运行状态\n"+
 			"  /config — 查看当前设置\n"+
 			"  /set <key> <value> — 更新配置\n"+
@@ -375,6 +376,12 @@ func (d *Dispatcher) handleCommand(ctx context.Context, msg *telego.Message, top
 		}
 		_ = d.sessionMgr.Clear(d.workspace, d.botCfg.Name, chatID, topicID)
 		d.reply(chatID, topicID, fmt.Sprintf("✓ %s 已清除，session 已重置", args))
+	case "update":
+		d.reply(chatID, topicID, "⏳ 正在重启并拉取最新版本，稍候...")
+		go func() {
+			time.Sleep(500 * time.Millisecond)
+			os.Exit(0) // watchdog (run.sh) 会自动 git pull + rebuild + 重启
+		}()
 	case "clear":
 		if err := d.sessionMgr.Clear(d.workspace, d.botCfg.Name, chatID, topicID); err != nil {
 			slog.Error("清除会话失败", "err", err, "chat_id", chatID, "topic_id", topicID)
