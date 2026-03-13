@@ -36,6 +36,8 @@ type HeartbeatConfig struct {
 	Prompt          string        `mapstructure:"prompt"`
 	QuietWindows    []QuietWindow `mapstructure:"quiet_windows"`
 	Timezone        string        `mapstructure:"timezone"`
+	ChatID          int64         `mapstructure:"chat_id"`   // 发送心跳结果的 Telegram chat ID（必填）
+	TopicID         int           `mapstructure:"topic_id"`  // 发送到论坛 topic（0 = 普通聊天）
 }
 
 // MemoryConfig claude-mem / mem0 集成配置。

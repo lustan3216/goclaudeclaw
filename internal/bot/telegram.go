@@ -144,6 +144,14 @@ func (m *Manager) Run(ctx context.Context) {
 	slog.Info("所有 bot 已退出")
 }
 
+// Send 使用第一个 bot 向指定 chat 发送消息（心跳等系统消息使用）。
+func (m *Manager) Send(chatID int64, topicID int, text string) {
+	if len(m.bots) == 0 {
+		return
+	}
+	m.bots[0].dispatcher.reply(chatID, topicID, text)
+}
+
 // UpdateConfig 向所有 bot 广播配置更新。
 func (m *Manager) UpdateConfig(cfg *config.Config) {
 	for _, b := range m.bots {

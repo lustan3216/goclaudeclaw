@@ -120,7 +120,7 @@ func run(flags *cliFlags) error {
 	}
 
 	// ── 8. Heartbeat ────────────────────────────────────────────────
-	hb, err := scheduler.NewHeartbeat(&cfg.Heartbeat, runnerMgr, workspace)
+	hb, err := scheduler.NewHeartbeat(&cfg.Heartbeat, runnerMgr, workspace, botMgr.Send)
 	if err != nil {
 		return fmt.Errorf("初始化心跳失败: %w", err)
 	}

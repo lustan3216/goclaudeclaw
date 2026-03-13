@@ -10,6 +10,9 @@ import (
 	"github.com/lustan3216/goclaudeclaw/internal/runner"
 )
 
+// SendFn 是心跳结果的 Telegram 发送回调，由 bot 层注入。
+type SendFn func(chatID int64, topicID int, text string)
+
 // Heartbeat 按配置间隔向 claude 发送定期 prompt，
 // 支持静默窗口（如夜间不打扰）和时区设置。
 type Heartbeat struct {
@@ -19,10 +22,11 @@ type Heartbeat struct {
 	loc       *time.Location
 	ticker    *time.Ticker
 	stopCh    chan struct{}
+	sendFn    SendFn // 结果发送回调，nil 表示仅记日志
 }
 
-// NewHeartbeat 创建心跳调度器。workspace 为执行 claude 的目录。
-func NewHeartbeat(cfg *config.HeartbeatConfig, runnerMgr *runner.Manager, workspace string) (*Heartbeat, error) {
+// NewHeartbeat 创建心跳调度器。sendFn 用于将心跳结果发送到 Telegram，nil 则只记日志。
+func NewHeartbeat(cfg *config.HeartbeatConfig, runnerMgr *runner.Manager, workspace string, sendFn SendFn) (*Heartbeat, error) {
 	loc, err := time.LoadLocation(cfg.Timezone)
 	if err != nil {
 		slog.Warn("时区加载失败，使用 UTC", "timezone", cfg.Timezone, "err", err)
@@ -35,6 +39,7 @@ func NewHeartbeat(cfg *config.HeartbeatConfig, runnerMgr *runner.Manager, worksp
 		workspace: workspace,
 		loc:       loc,
 		stopCh:    make(chan struct{}),
+		sendFn:    sendFn,
 	}, nil
 }
 
@@ -81,24 +86,41 @@ func (h *Heartbeat) Stop() {
 	close(h.stopCh)
 }
 
-// fire 触发一次心跳：向 runner 提交 prompt 任务。
-// 心跳任务始终以后台模式运行，不阻塞消息队列。
+// fire 触发一次心跳：向 runner 提交 prompt 任务，并将结果发送到 Telegram。
 func (h *Heartbeat) fire(ctx context.Context, t time.Time) {
+	if h.sendFn == nil || h.cfg.ChatID == 0 {
+		slog.Warn("心跳未配置发送目标（chat_id），跳过", "time", t.Format("15:04"))
+		return
+	}
+
 	prompt := h.cfg.Prompt
 	if prompt == "" {
 		prompt = "Check pending tasks and provide a brief status update."
 	}
 
-	slog.Info("触发心跳", "time", t.Format("15:04"), "prompt_preview", truncate(prompt, 60))
+	slog.Info("触发心跳", "time", t.Format("15:04"), "chat_id", h.cfg.ChatID, "prompt_preview", truncate(prompt, 60))
 
-	// 心跳不需要等待结果，ModeBackground 且不传 resultCh
+	resultCh := make(chan runner.Result, 1)
 	h.runnerMgr.Submit(runner.Job{
 		Ctx:       ctx,
 		Workspace: h.workspace,
+		ChatID:    h.cfg.ChatID,
+		TopicID:   h.cfg.TopicID,
 		Prompt:    prompt,
 		Mode:      runner.ModeBackground,
-		ResultCh:  nil, // 结果由日志记录，不发送到 Telegram
+		ResultCh:  resultCh,
 	})
+
+	go func() {
+		result := <-resultCh
+		if result.Err != nil {
+			slog.Warn("心跳任务失败", "err", result.Err)
+			return
+		}
+		if result.Output != "" {
+			h.sendFn(h.cfg.ChatID, h.cfg.TopicID, result.Output)
+		}
+	}()
 }
 
 // isQuietTime 检查当前时间是否在任意静默窗口内。
