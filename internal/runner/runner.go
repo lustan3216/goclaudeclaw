@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"os"
 	"os/exec"
 	"strings"
 	"sync"
@@ -42,11 +43,19 @@ type claudeJSONOutput struct {
 	// 其他字段按需扩展
 }
 
-// Manager 管理所有 workspace 的串行执行队列。
-// 每个 workspace 对应一个独立的 goroutine + buffered channel。
+// queueKey 唯一标识一条串行队列：每个 chat+topic 独立排队，互不阻塞。
+type queueKey struct {
+	workspace string
+	botName   string
+	chatID    int64
+	topicID   int
+}
+
+// Manager 管理所有会话的串行执行队列。
+// 每个 workspace+bot+chat+topic 独立一条队列，避免不同话题互相阻塞。
 type Manager struct {
 	mu         sync.Mutex
-	queues     map[string]chan Job // workspace → job channel
+	queues     map[queueKey]chan Job
 	sessions   *session.Manager
 	classifier *Classifier
 	cfg        *config.Config
@@ -56,7 +65,7 @@ type Manager struct {
 // NewManager 创建 Runner Manager。
 func NewManager(cfg *config.Config, sessions *session.Manager, claudePath string) *Manager {
 	return &Manager{
-		queues:     make(map[string]chan Job),
+		queues:     make(map[queueKey]chan Job),
 		sessions:   sessions,
 		classifier: NewClassifier(claudePath),
 		cfg:        cfg,
@@ -71,14 +80,15 @@ func (m *Manager) UpdateConfig(cfg *config.Config) {
 	m.cfg = cfg
 }
 
-// Submit 将任务提交到对应 workspace 的串行队列。
+// Submit 将任务提交到对应 chat+topic 的串行队列。
 // 对于 ModeBackground 任务，resultCh 可传 nil（调用方不等待结果）。
 func (m *Manager) Submit(job Job) {
-	q := m.getOrCreateQueue(job.Workspace)
+	key := queueKey{job.Workspace, job.BotName, job.ChatID, job.TopicID}
+	q := m.getOrCreateQueue(key)
 
 	select {
 	case q <- job:
-		slog.Debug("任务已入队", "workspace", job.Workspace, "mode", job.Mode)
+		slog.Debug("任务已入队", "workspace", job.Workspace, "chat_id", job.ChatID, "topic_id", job.TopicID, "mode", job.Mode)
 	case <-job.Ctx.Done():
 		slog.Warn("任务入队前上下文已取消", "workspace", job.Workspace)
 		if job.ResultCh != nil {
@@ -87,26 +97,26 @@ func (m *Manager) Submit(job Job) {
 	}
 }
 
-// getOrCreateQueue 获取或创建 workspace 对应的串行队列 goroutine。
-func (m *Manager) getOrCreateQueue(workspace string) chan Job {
+// getOrCreateQueue 获取或创建 chat+topic 对应的串行队列 goroutine。
+func (m *Manager) getOrCreateQueue(key queueKey) chan Job {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	if q, ok := m.queues[workspace]; ok {
+	if q, ok := m.queues[key]; ok {
 		return q
 	}
 
 	// 缓冲大小 32：允许短时间内积压，防止 Telegram 消息丢失
 	q := make(chan Job, 32)
-	m.queues[workspace] = q
-	go m.runQueue(workspace, q)
-	slog.Info("为 workspace 创建串行执行队列", "workspace", workspace)
+	m.queues[key] = q
+	go m.runQueue(key, q)
+	slog.Info("为 chat+topic 创建串行执行队列", "workspace", key.workspace, "chat_id", key.chatID, "topic_id", key.topicID)
 	return q
 }
 
-// runQueue 是每个 workspace 的串行执行 goroutine，
+// runQueue 是每个 chat+topic 的串行执行 goroutine，
 // 按序消费队列中的任务，直到 channel 被关闭。
-func (m *Manager) runQueue(workspace string, q <-chan Job) {
+func (m *Manager) runQueue(key queueKey, q <-chan Job) {
 	for job := range q {
 		result := m.execute(job)
 		if job.ResultCh != nil {
@@ -136,6 +146,15 @@ func (m *Manager) execute(job Job) Result {
 
 	cmd := exec.CommandContext(job.Ctx, m.claudePath, args...)
 	cmd.Dir = job.Workspace
+
+	// 过滤掉 CLAUDECODE 环境变量，避免 claude 拒绝嵌套启动
+	filtered := make([]string, 0, len(os.Environ()))
+	for _, e := range os.Environ() {
+		if !strings.HasPrefix(e, "CLAUDECODE=") {
+			filtered = append(filtered, e)
+		}
+	}
+	cmd.Env = filtered
 
 	// 流式读取输出
 	stdout, err := cmd.StdoutPipe()
