@@ -144,6 +144,19 @@ Run multiple bots from a single config — different people, different projects,
 
 Optional periodic check-ins. Claude surfaces anything worth your attention on a timer. Configure quiet windows so it stays silent at night.
 
+### Built-in MCP Servers
+
+Fill in a token and goclaudeclaw generates `.mcp.json` in your workspace automatically — no manual setup. Claude picks it up on the next run.
+
+| Server | Token field | What it unlocks |
+|--------|-------------|-----------------|
+| GitHub | `mcps.github.token` | Read/write repos, issues, PRs |
+| Notion | `mcps.notion.token` | Read/write Notion pages and databases |
+| Brave Search | `mcps.brave.api_key` | Web search |
+| Browser (Puppeteer) | `mcps.browser.enabled: true` | Headless browser automation |
+
+Leave any field empty / false to disable that server. Config changes hot-reload — no restart needed.
+
 ### Cron Jobs
 
 Schedule prompts with standard cron syntax. Daily reports, weekly summaries, whatever you want on a clock.
@@ -191,6 +204,13 @@ Schedule prompts with standard cron syntax. Daily reports, weekly summaries, wha
       "prompt": "What's on today's agenda?"
     }
   ],
+
+  "mcps": {
+    "github":  { "token": "" },
+    "notion":  { "token": "" },
+    "browser": { "enabled": false },
+    "brave":   { "api_key": "" }
+  },
 
   "security": {
     "level": "moderate"

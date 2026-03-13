@@ -23,6 +23,12 @@
       { "start": "23:00", "end": "08:00" }
     ]
   },
+  "mcps": {
+    "github":  { "token": "" },
+    "notion":  { "token": "" },
+    "browser": { "enabled": false },
+    "brave":   { "api_key": "" }
+  },
   "security": {
     "level": "moderate"
   },

@@ -22,6 +22,7 @@ import (
 	"github.com/lustan3216/goclaudeclaw/internal/bot"
 	"github.com/lustan3216/goclaudeclaw/internal/config"
 	"github.com/lustan3216/goclaudeclaw/internal/daemon"
+	"github.com/lustan3216/goclaudeclaw/internal/mcp"
 	"github.com/lustan3216/goclaudeclaw/internal/memory"
 	"github.com/lustan3216/goclaudeclaw/internal/runner"
 	"github.com/lustan3216/goclaudeclaw/internal/scheduler"
@@ -106,26 +107,31 @@ func run(flags *cliFlags) error {
 		slog.Info("claude-mem 连接正常", "endpoint", cfg.Memory.Endpoint)
 	}
 
-	// ── 5. Session Manager ──────────────────────────────────────────
+	// ── 5. MCP 配置生成 ─────────────────────────────────────────────
 	workspace := resolvePath(cfg.Workspace)
+	if err := mcp.ApplyConfig(workspace, cfg.MCPs); err != nil {
+		slog.Warn("MCP 配置生成失败，忽略", "err", err)
+	}
+
+	// ── 6. Session Manager ──────────────────────────────────────────
 	sessionMgr := session.New()
 
-	// ── 6. Runner Manager ───────────────────────────────────────────
+	// ── 7. Runner Manager ───────────────────────────────────────────
 	runnerMgr := runner.NewManager(cfg, sessionMgr, flags.claudePath)
 
-	// ── 7. Telegram Bot Manager ─────────────────────────────────────
+	// ── 8. Telegram Bot Manager ─────────────────────────────────────
 	botMgr, err := bot.NewManager(cfg, runnerMgr, sessionMgr)
 	if err != nil {
 		return fmt.Errorf("初始化 bot 失败: %w", err)
 	}
 
-	// ── 8. Heartbeat ────────────────────────────────────────────────
+	// ── 9. Heartbeat ────────────────────────────────────────────────
 	hb, err := scheduler.NewHeartbeat(&cfg.Heartbeat, runnerMgr, workspace, botMgr.Send)
 	if err != nil {
 		return fmt.Errorf("初始化心跳失败: %w", err)
 	}
 
-	// ── 9. Cron Scheduler ───────────────────────────────────────────
+	// ── 10. Cron Scheduler ──────────────────────────────────────────
 	cronSched := scheduler.NewCronScheduler(runnerMgr, workspace)
 	if err := cronSched.LoadJobs(ctx, cfg.CronJobs); err != nil {
 		return fmt.Errorf("加载 cron 任务失败: %w", err)
@@ -133,7 +139,7 @@ func run(flags *cliFlags) error {
 	cronSched.Start()
 	defer cronSched.Stop(ctx)
 
-	// ── 10. 配置热重载回调 ───────────────────────────────────────────
+	// ── 11. 配置热重载回调 ───────────────────────────────────────────
 	cfgManager.OnChange(func(newCfg *config.Config) {
 		slog.Info("配置热重载生效")
 		runnerMgr.UpdateConfig(newCfg)
@@ -141,9 +147,13 @@ func run(flags *cliFlags) error {
 		if err := cronSched.LoadJobs(ctx, newCfg.CronJobs); err != nil {
 			slog.Error("热重载 cron 任务失败", "err", err)
 		}
+		// MCP 配置变更时重新生成 .mcp.json
+		if err := mcp.ApplyConfig(workspace, newCfg.MCPs); err != nil {
+			slog.Warn("热重载 MCP 配置失败", "err", err)
+		}
 	})
 
-	// ── 11. 启动各服务 ──────────────────────────────────────────────
+	// ── 12. 启动各服务 ──────────────────────────────────────────────
 	// 心跳（独立 goroutine）
 	go hb.Start(ctx)
 
@@ -154,7 +164,7 @@ func run(flags *cliFlags) error {
 		"workspace", workspace,
 		"bots", len(cfg.Bots))
 
-	// ── 12. 等待停止信号 ─────────────────────────────────────────────
+	// ── 13. 等待停止信号 ─────────────────────────────────────────────
 	daemon.WaitForShutdown(cancel)
 
 	slog.Info("优雅关闭完成，再见 ⚡")

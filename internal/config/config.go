@@ -23,6 +23,34 @@ type BotConfig struct {
 	MemoryCompressInterval    int `mapstructure:"memory_compress_interval"`    // 每 N 次 memory 更新后压缩 memory.md，0 = 禁用
 }
 
+// MCPsConfig 预置 MCP 服务器配置，token 留空则不启用该服务器。
+type MCPsConfig struct {
+	GitHub  MCPGitHubConfig  `mapstructure:"github"`
+	Notion  MCPNotionConfig  `mapstructure:"notion"`
+	Browser MCPBrowserConfig `mapstructure:"browser"`
+	Brave   MCPBraveConfig   `mapstructure:"brave"`
+}
+
+// MCPGitHubConfig GitHub MCP 服务器（@modelcontextprotocol/server-github）。
+type MCPGitHubConfig struct {
+	Token string `mapstructure:"token"` // GitHub personal access token，留空则禁用
+}
+
+// MCPNotionConfig Notion MCP 服务器（@notionhq/notion-mcp-server）。
+type MCPNotionConfig struct {
+	Token string `mapstructure:"token"` // Notion integration token，留空则禁用
+}
+
+// MCPBrowserConfig 浏览器自动化 MCP（@modelcontextprotocol/server-puppeteer）。
+type MCPBrowserConfig struct {
+	Enabled bool `mapstructure:"enabled"` // true 启用，无需 token
+}
+
+// MCPBraveConfig Brave 搜索 MCP（@modelcontextprotocol/server-brave-search）。
+type MCPBraveConfig struct {
+	APIKey string `mapstructure:"api_key"` // Brave Search API key，留空则禁用
+}
+
 // QuietWindow 定义心跳静默时间段（本地时间）。
 type QuietWindow struct {
 	Start string `mapstructure:"start"` // "23:00"
@@ -80,6 +108,7 @@ type Config struct {
 	Security  SecurityConfig  `mapstructure:"security"`
 	Web       WebConfig       `mapstructure:"web"`
 	CronJobs  []CronJob       `mapstructure:"cron_jobs"`
+	MCPs      MCPsConfig      `mapstructure:"mcps"`
 }
 
 // Manager 持有当前配置并支持热重载。
