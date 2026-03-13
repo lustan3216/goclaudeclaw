@@ -1,8 +1,9 @@
 #!/bin/bash
 # goclaudeclaw 自動更新 watchdog
-# auto_update=true (預設) 每次重啟前 git pull + rebuild
-# 可透過 Telegram /set auto_update false 關閉
-set -e
+#
+# auto_update=true（預設）：啟動時立即跑當前版本，同時後台 git pull + rebuild。
+#   更新完存成 goclaudeclaw.new，下次重啟才換入，不影響當次啟動。
+# auto_update=false：只重啟，不更新。
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
@@ -10,11 +11,11 @@ cd "$SCRIPT_DIR"
 GOBIN=/data/go/go/bin/go
 LOG=/tmp/goclaudeclaw.log
 CONFIG="$SCRIPT_DIR/config.json"
+UPDATE_PID=""
 
-# 從 config.json 讀取 auto_update，預設 true
 get_auto_update() {
     python3 -c "
-import json, sys
+import json
 try:
     d = json.load(open('$CONFIG'))
     print(str(d.get('auto_update', True)).lower())
@@ -24,25 +25,41 @@ except:
 }
 
 while true; do
-    AUTO=$(get_auto_update)
-    if [ "$AUTO" = "true" ]; then
-        echo "[$(date '+%Y-%m-%d %H:%M:%S')] 自動更新已啟用，拉取最新代碼..." | tee -a "$LOG"
-        git pull origin main 2>&1 | tee -a "$LOG"
-
-        echo "[$(date '+%Y-%m-%d %H:%M:%S')] 編譯中..." | tee -a "$LOG"
-        if $GOBIN build -o goclaudeclaw.new ./cmd/goclaudeclaw/ 2>&1 | tee -a "$LOG"; then
-            mv goclaudeclaw.new goclaudeclaw
-            echo "[$(date '+%Y-%m-%d %H:%M:%S')] 編譯成功" | tee -a "$LOG"
-        else
-            echo "[$(date '+%Y-%m-%d %H:%M:%S')] 編譯失敗，使用舊版本" | tee -a "$LOG"
-        fi
-    else
-        echo "[$(date '+%Y-%m-%d %H:%M:%S')] 自動更新已停用，直接重啟..." | tee -a "$LOG"
+    # 如果上次後台編譯完成，換入新版本
+    if [ -f goclaudeclaw.new ]; then
+        mv goclaudeclaw.new goclaudeclaw
+        echo "[$(date '+%Y-%m-%d %H:%M:%S')] 已切換至新版本" | tee -a "$LOG"
     fi
 
     echo "[$(date '+%Y-%m-%d %H:%M:%S')] 啟動 goclaudeclaw..." | tee -a "$LOG"
+
+    # 後台異步更新（在 goclaudeclaw 運行期間進行，不阻塞啟動）
+    AUTO=$(get_auto_update)
+    if [ "$AUTO" = "true" ]; then
+        (
+            echo "[$(date '+%Y-%m-%d %H:%M:%S')] [bg] 拉取最新代碼..." >> "$LOG"
+            git pull origin main >> "$LOG" 2>&1
+            echo "[$(date '+%Y-%m-%d %H:%M:%S')] [bg] 編譯中..." >> "$LOG"
+            if $GOBIN build -o goclaudeclaw.new ./cmd/goclaudeclaw/ >> "$LOG" 2>&1; then
+                echo "[$(date '+%Y-%m-%d %H:%M:%S')] [bg] 新版本已就緒，下次重啟生效" | tee -a "$LOG"
+            else
+                rm -f goclaudeclaw.new
+                echo "[$(date '+%Y-%m-%d %H:%M:%S')] [bg] 編譯失敗，保留當前版本" | tee -a "$LOG"
+            fi
+        ) &
+        UPDATE_PID=$!
+    fi
+
+    # 運行主程序
     ./goclaudeclaw >> "$LOG" 2>&1
     EXIT_CODE=$?
     echo "[$(date '+%Y-%m-%d %H:%M:%S')] goclaudeclaw 退出 (code=$EXIT_CODE)，3 秒後重啟..." | tee -a "$LOG"
+
+    # 等待後台更新完成（如果還在跑）
+    if [ -n "$UPDATE_PID" ]; then
+        wait "$UPDATE_PID" 2>/dev/null || true
+        UPDATE_PID=""
+    fi
+
     sleep 3
 done
