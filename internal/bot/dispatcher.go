@@ -304,19 +304,19 @@ func (d *Dispatcher) handleCommand(ctx context.Context, msg *telego.Message, top
 	case "start", "help":
 		d.reply(chatID, topicID, fmt.Sprintf(
 			"⚡ *goclaudeclaw* `%s`\n\n"+
-				"💬 *對話*\n"+
+				"*💬 對話*\n"+
 				"直接发消息即可与 Claude 对话\n"+
 				"`/clear`          清除 session，重载 MCP\n"+
 				"`/bg <任务>`      强制后台模式，长任务不堵对话\n"+
 				"`/status`         查看运行状态\n"+
 				"`/usage`          今日 token 用量统计\n\n"+
-				"🔄 *更新*\n"+
+				"*🔄 更新*\n"+
 				"`/update`         立即重启并拉取最新版本\n\n"+
-				"⚙️ *MCP 配置*\n"+
+				"*⚙️ MCP 配置*\n"+
 				"`/config`                    查看所有设置（token 脱敏）\n"+
 				"`/set <key> <value>`  更新配置，立即生效并重置 session\n"+
 				"`/unset <key>`          清除配置值\n\n"+
-				"🔑 *可設置的 Key*\n"+
+				"*🔑 可設置的 Key*\n"+
 				"```\n"+
 				"github_token   GitHub Personal Access Token\n"+
 				"notion_token   Notion Integration Token\n"+
@@ -325,7 +325,7 @@ func (d *Dispatcher) handleCommand(ctx context.Context, msg *telego.Message, top
 				"gemini         Gemini MCP        true/false\n"+
 				"auto_update    自动更新          true/false\n"+
 				"```\n\n"+
-				"📝 *示例*\n"+
+				"*📝 示例*\n"+
 				"```\n"+
 				"/set notion_token secret_xxx\n"+
 				"/set gemini true\n"+
