@@ -58,7 +58,7 @@ func newRootCmd() *cobra.Command {
 		},
 	}
 
-	root.PersistentFlags().StringVarP(&flags.configPath, "config", "c", "config.yaml", "配置文件路径")
+	root.PersistentFlags().StringVarP(&flags.configPath, "config", "c", "config.json", "配置文件路径")
 	root.PersistentFlags().StringVar(&flags.pidFile, "pid-file", "", "PID 文件路径（留空则不写入）")
 	root.PersistentFlags().StringVar(&flags.claudePath, "claude", "claude", "claude 二进制路径")
 	root.PersistentFlags().BoolVar(&flags.debug, "debug", false, "开启调试日志")

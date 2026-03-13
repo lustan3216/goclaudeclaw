@@ -1,0 +1,20 @@
+{
+  "workspace": "/data/workspace-3",
+  "bots": [
+    {
+      "name": "main",
+      "token": "8480122552:AAHMlDj6cCI2qQ-vDOABerUJdIKf7tDAqTw",
+      "allowed_users": [381215786],
+      "debounce_ms": 1500,
+      "openai_api_key": ""
+    }
+  ],
+  "security": {
+    "level": "moderate"
+  },
+  "web": {
+    "enabled": false,
+    "host": "127.0.0.1",
+    "port": 4632
+  }
+}

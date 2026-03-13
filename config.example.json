@@ -1,0 +1,48 @@
+{
+  "workspace": "/path/to/your/project",
+  "bots": [
+    {
+      "name": "main",
+      "token": "TOKEN_1",
+      "allowed_users": [123456789],
+      "debounce_ms": 1500,
+      "openai_api_key": ""
+    },
+    {
+      "name": "work",
+      "token": "TOKEN_2",
+      "allowed_users": [123456789, 987654321],
+      "debounce_ms": 500,
+      "openai_api_key": ""
+    }
+  ],
+  "memory": {
+    "provider": "claude-mem",
+    "endpoint": "http://localhost:8080"
+  },
+  "heartbeat": {
+    "enabled": true,
+    "interval_minutes": 15,
+    "prompt": "Check pending tasks and summarize any important updates.",
+    "timezone": "Asia/Shanghai",
+    "quiet_windows": [
+      { "start": "23:00", "end": "08:00" }
+    ]
+  },
+  "cron_jobs": [
+    {
+      "name": "daily-report",
+      "schedule": "0 0 9 * * *",
+      "prompt": "Generate a daily summary of yesterday's work.",
+      "workspace": ""
+    }
+  ],
+  "security": {
+    "level": "moderate"
+  },
+  "web": {
+    "enabled": false,
+    "host": "127.0.0.1",
+    "port": 4632
+  }
+}
