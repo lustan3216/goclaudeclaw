@@ -13,11 +13,12 @@ import (
 
 // BotConfig 单个 Telegram Bot 的配置。
 type BotConfig struct {
-	Name         string  `mapstructure:"name"`
-	Token        string  `mapstructure:"token"`
-	AllowedUsers []int64 `mapstructure:"allowed_users"`
-	DebounceMs   int     `mapstructure:"debounce_ms"`
-	OpenAIAPIKey string  `mapstructure:"openai_api_key"` // Whisper 语音转文字，留空则读 OPENAI_API_KEY 环境变量
+	Name                string  `mapstructure:"name"`
+	Token               string  `mapstructure:"token"`
+	AllowedUsers        []int64 `mapstructure:"allowed_users"`
+	DebounceMs          int     `mapstructure:"debounce_ms"`
+	OpenAIAPIKey        string  `mapstructure:"openai_api_key"`        // Whisper 语音转文字，留空则读 OPENAI_API_KEY 环境变量
+	MemoryUpdateInterval int    `mapstructure:"memory_update_interval"` // 每 N 次成功完成后更新 memory.md，0 = 禁用
 }
 
 // QuietWindow 定义心跳静默时间段（本地时间）。

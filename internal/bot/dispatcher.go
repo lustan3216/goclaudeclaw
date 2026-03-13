@@ -55,6 +55,9 @@ type Dispatcher struct {
 	mu       sync.Mutex
 	debounce map[chatTopicKey]*debounceState // chat+topic → 防抖状态
 
+	countsMu         sync.Mutex
+	completionCounts map[chatTopicKey]int // chat+topic → 成功完成次数（用于触发记忆更新）
+
 	runnerMgr  *runner.Manager
 	sessionMgr *session.Manager
 	classifier *runner.Classifier
@@ -74,8 +77,9 @@ func NewDispatcher(
 	workspace string,
 ) *Dispatcher {
 	return &Dispatcher{
-		debounce:   make(map[chatTopicKey]*debounceState),
-		runnerMgr:  runnerMgr,
+		debounce:         make(map[chatTopicKey]*debounceState),
+		completionCounts: make(map[chatTopicKey]int),
+		runnerMgr:        runnerMgr,
 		sessionMgr: sessionMgr,
 		classifier: runner.NewClassifier("claude"),
 		cfg:        cfg,
@@ -412,6 +416,7 @@ func (d *Dispatcher) dispatchJob(ctx context.Context, chatID int64, topicID int,
 			}
 			d.react(chatID, replyToID, "✅")
 			d.sendOutputTo(chatID, topicID, replyToID, result.Output)
+			d.maybeUpdateMemory(ctx, chatID, topicID)
 		}()
 		return
 	}
@@ -474,6 +479,54 @@ func (d *Dispatcher) dispatchJob(ctx context.Context, chatID int64, topicID int,
 	}
 	d.react(chatID, replyToID, "✅")
 	d.sendOutputTo(chatID, topicID, replyToID, result.Output)
+	d.maybeUpdateMemory(ctx, chatID, topicID)
+}
+
+// maybeUpdateMemory 在每 N 次成功完成后静默触发 memory.md 更新。
+// 不向用户发送任何消息，结果只写日志。
+func (d *Dispatcher) maybeUpdateMemory(ctx context.Context, chatID int64, topicID int) {
+	interval := d.botCfg.MemoryUpdateInterval
+	if interval <= 0 {
+		return
+	}
+
+	key := chatTopicKey{chatID, topicID}
+	d.countsMu.Lock()
+	d.completionCounts[key]++
+	count := d.completionCounts[key]
+	d.countsMu.Unlock()
+
+	if count%interval != 0 {
+		return
+	}
+
+	slog.Info("触发记忆更新", "chat_id", chatID, "topic_id", topicID, "count", count)
+
+	prompt := "請根據以上對話，靜默更新工作目錄下的 .goclaudeclaw/memory.md 文件，" +
+		"記錄對未來對話有幫助的上下文、用戶偏好、重要決策和項目知識。" +
+		"保持文件簡潔，以 Markdown 格式組織。不需要回覆任何其他內容。"
+
+	resultCh := make(chan runner.Result, 1)
+	d.runnerMgr.Submit(runner.Job{
+		Ctx:       ctx,
+		Workspace: d.workspace,
+		BotName:   d.botCfg.Name,
+		ChatID:    chatID,
+		TopicID:   topicID,
+		Prompt:    prompt,
+		Mode:      runner.ModeForeground,
+		ResultCh:  resultCh,
+	})
+
+	// 丢弃结果，只记录日志
+	go func() {
+		result := <-resultCh
+		if result.Err != nil {
+			slog.Warn("记忆更新失败", "err", result.Err, "chat_id", chatID, "topic_id", topicID)
+		} else {
+			slog.Info("记忆更新完成", "chat_id", chatID, "topic_id", topicID)
+		}
+	}()
 }
 
 // sendOutputTo 处理超长输出，首段 quote 触发消息，后续段直接发送。
