@@ -308,7 +308,8 @@ func (d *Dispatcher) handleCommand(ctx context.Context, msg *telego.Message, top
 				"直接发消息即可与 Claude 对话\n"+
 				"`/clear`          清除 session，重载 MCP\n"+
 				"`/bg <任务>`      强制后台模式，长任务不堵对话\n"+
-				"`/status`         查看运行状态\n\n"+
+				"`/status`         查看运行状态\n"+
+				"`/usage`          今日 token 用量统计\n\n"+
 				"*🔄 更新*\n"+
 				"`/update`         立即重启并拉取最新版本\n\n"+
 				"*⚙️ MCP 配置*\n"+
@@ -425,9 +426,137 @@ func (d *Dispatcher) handleCommand(ctx context.Context, msg *telego.Message, top
 			return
 		}
 		d.dispatchJob(ctx, chatID, topicID, msg.MessageID, args, runner.ModeBackground)
+	case "usage":
+		d.reply(chatID, topicID, d.buildUsageReport())
 	default:
 		d.reply(chatID, topicID, "未知命令，发送 /help 查看帮助。")
 	}
+}
+
+// buildUsageReport 统计 ~/.claude/projects/ 下今日 token 用量。
+func (d *Dispatcher) buildUsageReport() string {
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		return "❌ 无法读取用量数据"
+	}
+
+	// 将 workspace 路径转换为 Claude 的 project key（路径中 / 替换为 -）
+	projectKey := strings.ReplaceAll(d.workspace, "/", "-")
+	projectDir := filepath.Join(homeDir, ".claude", "projects", projectKey)
+
+	entries, err := os.ReadDir(projectDir)
+	if err != nil {
+		return "❌ 找不到 session 记录（" + projectDir + "）"
+	}
+
+	type usageStats struct {
+		inputTokens  int64
+		outputTokens int64
+		cacheCreate  int64
+		cacheRead    int64
+		sessions     int
+		messages     int
+	}
+
+	today := time.Now().UTC().Format("2006-01-02")
+	todayStats := usageStats{}
+	totalStats := usageStats{}
+
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".jsonl") {
+			continue
+		}
+		fpath := filepath.Join(projectDir, entry.Name())
+		data, err := os.ReadFile(fpath)
+		if err != nil {
+			continue
+		}
+
+		sessionCounted := false
+		sessionTodayCounted := false
+
+		for _, line := range strings.Split(string(data), "\n") {
+			line = strings.TrimSpace(line)
+			if line == "" {
+				continue
+			}
+			var record struct {
+				Timestamp string `json:"timestamp"`
+				Message   struct {
+					Usage struct {
+						InputTokens            int64 `json:"input_tokens"`
+						OutputTokens           int64 `json:"output_tokens"`
+						CacheCreationInputTokens int64 `json:"cache_creation_input_tokens"`
+						CacheReadInputTokens   int64 `json:"cache_read_input_tokens"`
+					} `json:"usage"`
+				} `json:"message"`
+			}
+			if err := json.Unmarshal([]byte(line), &record); err != nil {
+				continue
+			}
+			u := record.Message.Usage
+			if u.InputTokens == 0 && u.OutputTokens == 0 {
+				continue
+			}
+
+			totalStats.inputTokens += u.InputTokens
+			totalStats.outputTokens += u.OutputTokens
+			totalStats.cacheCreate += u.CacheCreationInputTokens
+			totalStats.cacheRead += u.CacheReadInputTokens
+			totalStats.messages++
+			if !sessionCounted {
+				totalStats.sessions++
+				sessionCounted = true
+			}
+
+			if strings.HasPrefix(record.Timestamp, today) {
+				todayStats.inputTokens += u.InputTokens
+				todayStats.outputTokens += u.OutputTokens
+				todayStats.cacheCreate += u.CacheCreationInputTokens
+				todayStats.cacheRead += u.CacheReadInputTokens
+				todayStats.messages++
+				if !sessionTodayCounted {
+					todayStats.sessions++
+					sessionTodayCounted = true
+				}
+			}
+		}
+	}
+
+	fmtK := func(n int64) string {
+		if n >= 1000 {
+			return fmt.Sprintf("%.1fk", float64(n)/1000)
+		}
+		return fmt.Sprintf("%d", n)
+	}
+
+	return fmt.Sprintf(
+		"📊 *Token 用量统计*\n\n"+
+			"*今日 (%s)*\n"+
+			"```\n"+
+			"输入        %s\n"+
+			"输出        %s\n"+
+			"缓存写入    %s\n"+
+			"缓存命中    %s\n"+
+			"消息数      %d  (%d sessions)\n"+
+			"```\n\n"+
+			"*全部记录*\n"+
+			"```\n"+
+			"输入        %s\n"+
+			"输出        %s\n"+
+			"缓存写入    %s\n"+
+			"缓存命中    %s\n"+
+			"消息数      %d  (%d sessions)\n"+
+			"```\n\n"+
+			"额度余额请查看: console\\.anthropic\\.com",
+		today,
+		fmtK(todayStats.inputTokens), fmtK(todayStats.outputTokens),
+		fmtK(todayStats.cacheCreate), fmtK(todayStats.cacheRead),
+		todayStats.messages, todayStats.sessions,
+		fmtK(totalStats.inputTokens), fmtK(totalStats.outputTokens),
+		fmtK(totalStats.cacheCreate), fmtK(totalStats.cacheRead),
+		totalStats.messages, totalStats.sessions,
+	)
 }
 
 // enqueueWithDebounce 将消息加入防抖窗口。
