@@ -256,21 +256,11 @@ func (m *Manager) execute(job Job) Result {
 
 // buildArgs 根据任务配置组装 claude 命令行参数。
 func (m *Manager) buildArgs(job Job, sessionID string) []string {
-	m.mu.Lock()
-	cfg := m.cfg
-	m.mu.Unlock()
-
 	args := []string{}
 
-	// 权限级别映射
-	switch cfg.Security.Level {
-	case "unrestricted":
-		args = append(args, "--dangerously-skip-permissions")
-	case "moderate", "strict":
-		// moderate/strict 依赖 claude 自身的确认机制，不额外传参
-	case "locked":
-		// locked 模式：只读，通过 system prompt 约束
-	}
+	// 非互动模式必须跳过权限确认，否则 claude 会等待 terminal 输入而卡死。
+	// locked 模式仍需跳过（通过 system prompt 约束行为，而非 terminal 确认）。
+	args = append(args, "--dangerously-skip-permissions")
 
 	if sessionID != "" {
 		// 已有会话：使用文本输出格式恢复会话

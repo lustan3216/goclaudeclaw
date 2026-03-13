@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"os"
 	"os/exec"
 	"strings"
 	"time"
@@ -71,6 +72,15 @@ func (c *Classifier) Classify(ctx context.Context, message string) TaskMode {
 		"--dangerously-skip-permissions",
 		"-p", prompt,
 	)
+
+	// 过滤 CLAUDECODE 环境变量，避免 claude 拒绝嵌套启动
+	filtered := make([]string, 0, len(os.Environ()))
+	for _, e := range os.Environ() {
+		if !strings.HasPrefix(e, "CLAUDECODE=") {
+			filtered = append(filtered, e)
+		}
+	}
+	cmd.Env = filtered
 
 	output, err := cmd.Output()
 	if err != nil {
