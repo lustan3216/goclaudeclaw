@@ -105,6 +105,10 @@ Set `openai_api_key` in config (or `OPENAI_API_KEY` env var) to enable voice.
 
 Place notes in `{workspace}/.goclaudeclaw/memory.md`. On every new session, this file is automatically injected as context — giving Claude persistent knowledge about your project, preferences, and decisions without needing an external service.
 
+### Typing Indicator
+
+While Claude processes a message, the bot sends Telegram's native `••• typing` indicator and refreshes it every 4 seconds until the response is ready. No placeholder messages — just the standard in-chat typing status.
+
 ### Auto Subagent Detection
 
 goclaudeclaw classifies each message as foreground (quick reply) or background (long task). Long tasks reply immediately and ping you when done. Use `/bg <task>` to force background mode manually.
