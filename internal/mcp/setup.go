@@ -70,6 +70,14 @@ func ApplyConfig(workspace string, mcps config.MCPsConfig) error {
 		}
 	}
 
+	// Gemini MCP（依赖本机 Gemini CLI 认证，无需 token）
+	if mcps.Gemini.Enabled {
+		servers["gemini"] = serverDef{
+			Command: "npx",
+			Args:    []string{"-y", "gemini-mcp-tool"},
+		}
+	}
+
 	dest := filepath.Join(workspace, ".mcp.json")
 
 	// 如果没有任何启用的服务器，删除文件（如果存在）

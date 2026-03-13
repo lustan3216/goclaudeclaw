@@ -318,6 +318,7 @@ func (d *Dispatcher) handleCommand(ctx context.Context, msg *telego.Message, top
 			"`notion_token` — Notion Integration Token\n"+
 			"`brave_key` — Brave Search API Key\n"+
 			"`browser` — 浏览器 MCP `true`/`false`\n"+
+			"`gemini` — Gemini MCP `true`/`false`（需本机 gemini auth）\n"+
 			"`auto_update` — 自动更新 `true`/`false`（默认 true）\n\n"+
 			"*示例*\n"+
 			"```\n/set notion_token secret_xxx\n/set auto_update false\n/unset brave_key\n```")
@@ -358,7 +359,7 @@ func (d *Dispatcher) handleCommand(ctx context.Context, msg *telego.Message, top
 		}
 		parts := strings.SplitN(args, " ", 2)
 		if len(parts) < 2 || parts[0] == "" || parts[1] == "" {
-			d.reply(chatID, topicID, "用法: /set <key> <value>\n\n可设置: github_token, notion_token, brave_key, browser, auto_update")
+			d.reply(chatID, topicID, "用法: /set <key> <value>\n\n可设置: github_token, notion_token, brave_key, browser, gemini, auto_update")
 			return
 		}
 		key, value := parts[0], parts[1]
@@ -375,7 +376,7 @@ func (d *Dispatcher) handleCommand(ctx context.Context, msg *telego.Message, top
 			return
 		}
 		if args == "" {
-			d.reply(chatID, topicID, "用法: /unset <key>\n\n可设置: github_token, notion_token, brave_key, browser, auto_update")
+			d.reply(chatID, topicID, "用法: /unset <key>\n\n可设置: github_token, notion_token, brave_key, browser, gemini, auto_update")
 			return
 		}
 		if err := d.cfgMgr.Set(args, ""); err != nil {

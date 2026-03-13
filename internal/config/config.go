@@ -29,6 +29,7 @@ type MCPsConfig struct {
 	Notion  MCPNotionConfig  `mapstructure:"notion"`
 	Browser MCPBrowserConfig `mapstructure:"browser"`
 	Brave   MCPBraveConfig   `mapstructure:"brave"`
+	Gemini  MCPGeminiConfig  `mapstructure:"gemini"`
 }
 
 // MCPGitHubConfig GitHub MCP 服务器（@modelcontextprotocol/server-github）。
@@ -49,6 +50,11 @@ type MCPBrowserConfig struct {
 // MCPBraveConfig Brave 搜索 MCP（@modelcontextprotocol/server-brave-search）。
 type MCPBraveConfig struct {
 	APIKey string `mapstructure:"api_key"` // Brave Search API key，留空则禁用
+}
+
+// MCPGeminiConfig Gemini MCP（gemini-mcp-tool），无需 token，依赖本机 Gemini CLI 认证。
+type MCPGeminiConfig struct {
+	Enabled bool `mapstructure:"enabled"` // true 启用，需本机已完成 gemini auth
 }
 
 // QuietWindow 定义心跳静默时间段（本地时间）。
@@ -191,6 +197,7 @@ var keyAliases = map[string]string{
 	"notion_token": "mcps.notion.token",
 	"brave_key":    "mcps.brave.api_key",
 	"browser":      "mcps.browser.enabled",
+	"gemini":       "mcps.gemini.enabled",
 	"auto_update":  "auto_update",
 }
 
