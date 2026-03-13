@@ -406,7 +406,6 @@ func (d *Dispatcher) dispatchJob(ctx context.Context, chatID int64, topicID int,
 			TopicID:   topicID,
 			Prompt:    prompt,
 			Mode:      mode,
-			MaxTurns:  d.botCfg.MaxTurns,
 			ResultCh:  resultCh,
 		})
 
@@ -446,7 +445,6 @@ func (d *Dispatcher) dispatchJob(ctx context.Context, chatID int64, topicID int,
 		TopicID:   topicID,
 		Prompt:    prompt,
 		Mode:      mode,
-		MaxTurns:  d.botCfg.MaxTurns,
 		ResultCh:  resultCh,
 	})
 

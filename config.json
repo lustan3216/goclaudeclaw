@@ -9,8 +9,7 @@
       "openai_api_key": "",
       "memory_update_interval": 5,
       "session_summarize_interval": 20,
-      "memory_compress_interval": 10,
-      "max_turns": 30
+      "memory_compress_interval": 10
     }
   ],
   "heartbeat": {

@@ -128,10 +128,6 @@ Three config knobs control automatic memory lifecycle:
 | `session_summarize_interval` | 0 (off) | Every N completions, Claude summarizes the conversation into `memory.md`, then resets the session — keeping context without bloating the history |
 | `memory_compress_interval` | 0 (off) | Every N memory updates, Claude deduplicates and trims `memory.md` to keep it lean |
 
-### Max Turns
-
-`max_turns` caps how many agentic tool-call rounds Claude can take per message (default: `30`). Without a limit, complex tasks can block the queue indefinitely. Set higher for deep research tasks, lower for quick-response bots.
-
 ### Typing Indicator
 
 While Claude processes a message, the bot sends Telegram's native `••• typing` indicator and refreshes it every 4 seconds until the response is ready. No placeholder messages — just the standard in-chat typing status.
@@ -169,8 +165,7 @@ Schedule prompts with standard cron syntax. Daily reports, weekly summaries, wha
       "openai_api_key": "",
       "memory_update_interval": 5,
       "session_summarize_interval": 20,
-      "memory_compress_interval": 10,
-      "max_turns": 30
+      "memory_compress_interval": 10
     }
   ],
 
