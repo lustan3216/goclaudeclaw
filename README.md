@@ -4,7 +4,19 @@
 
 goclaudeclaw is a Go rewrite of [ClaudeClaw](https://github.com/lustan3216/claudeclaw) — a daemon that keeps Claude Code running 24/7 and lets you talk to it over Telegram. Ask it to write code, run reports, check your project status, or kick off a long task while you're away from your desk.
 
-One binary. No Node, no Bun, no runtime to babysit.
+One binary. No Node, no Bun, no runtime to babysit — unless you enable MCP servers (see [Prerequisites](#prerequisites)).
+
+---
+
+## Prerequisites
+
+- **Claude Code CLI** (`claude`) — goclaudeclaw is a bridge to it, not a replacement
+- **Node.js + npx** — only required if you use the built-in MCP servers (GitHub, Notion, Brave, Browser)
+
+**Why Node for MCPs?**
+The MCP ecosystem runs on Node. Every MCP server is an npm package launched via `npx`. goclaudeclaw auto-generates the `.mcp.json` config file for you — but it can't bypass the fact that `npx` needs to be on your system to actually run the server processes. The first time Claude calls a tool from an MCP server, `npx -y` downloads and starts the package automatically. After that it's cached.
+
+If you don't use any MCP servers, Node is not needed at all.
 
 ---
 
