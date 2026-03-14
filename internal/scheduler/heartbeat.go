@@ -128,7 +128,7 @@ func (h *Heartbeat) buildPrompt() string {
 	if h.cfg.Prompt != "" {
 		return h.cfg.Prompt
 	}
-	return "Check pending tasks, reminders, and anything that needs attention. If nothing needs action, reply HEARTBEAT_OK."
+	return "Check pending tasks, reminders, and anything your human asked you to follow up on. If something needs attention, text them about it — casually, like a real person would. Short, natural, the way you'd message a friend. No formal updates, no bullet points, no \"just checking in.\" Your message shows up in their chat out of nowhere, so it should read like you genuinely thought of something and hit send. If nothing needs attention, share a short joke or an interesting life tip instead — something genuinely fun or useful, not generic. Keep it to 1-2 sentences max."
 }
 
 // isQuietTime checks whether the current time falls within any quiet window.
