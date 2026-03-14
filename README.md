@@ -48,38 +48,39 @@ claude plugin install lustan3216/claudeclaw
 claudeclaw
 ```
 
-No config file needed. On first launch, claudeclaw walks you through setup step by step:
+No config file needed. On first launch, claudeclaw asks for one thing — your bot token — then guides you through the rest inside Telegram:
 
 ```
-⚡ Welcome to claudeclaw — let's get you set up.
-
-Step 1/5 — Telegram Bot Token
-  Don't have a bot? Message @BotFather on Telegram → /newbot
+⚡ Welcome to claudeclaw — one step to get started.
+   Don't have a bot? Message @BotFather on Telegram → /newbot
 
   Bot token: xxxxxxx:xxxxxxxxx
   Verifying token... ✓ Connected as @my_claude_bot
 
-Step 2/5 — Your Telegram User ID
-  To find your ID: message @userinfobot on Telegram.
-
-  Your user ID: 123456789
-
-Step 3/5 — Workspace path
-  Press Enter to use the current directory: /home/user/myproject
-
-  Workspace [.]:
-
-Step 4/5 — Security level
-  moderate     — most operations auto-approved (recommended)
-  ...
-
-Step 5/5 — Optional integrations
-  GitHub token:
-  Notion token: ghp_xxxx
-  OpenAI API key:
-
 ✓ Config saved to config.json
-Starting claudeclaw with @my_claude_bot...
+Starting @my_claude_bot — message it on Telegram to finish setup.
+```
+
+Then send the bot any message. The first person to message it becomes the owner, and the bot walks you through the rest:
+
+```
+⚡ Welcome! You're the owner of this bot.
+
+Let's finish setup — everything can be configured right here in Telegram.
+
+📁 Workspace (currently: /home/user/myproject)
+🔒 Security (currently: moderate)
+   /set security_level strict
+
+🔑 Integrations (all optional)
+   /set github_token  ghp_xxx
+   /set notion_token  secret_xxx
+   /set brave_key     BSA_xxx
+   /set browser       true
+   /set gemini        true
+
+👥 Add more users
+   /adduser <telegram_id>
 ```
 
 Config is saved to `config.json`. To re-run setup anytime: `claudeclaw --setup`
