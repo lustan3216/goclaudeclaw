@@ -362,17 +362,19 @@ func (d *Dispatcher) handleCommand(ctx context.Context, msg *telego.Message, top
 				"`/unset <key>`          Clear a config value\n\n"+
 				"*🔑 Settable Keys*\n"+
 				"```\n"+
-				"github_token   GitHub Personal Access Token\n"+
-				"notion_token   Notion Integration Token\n"+
-				"brave_key      Brave Search API Key\n"+
-				"browser        Browser MCP        true/false\n"+
-				"gemini         Gemini MCP         true/false\n"+
-				"auto_update    Auto-update        true/false\n"+
+				"github_token     GitHub Personal Access Token\n"+
+				"notion_token     Notion Integration Token\n"+
+				"brave_key        Brave Search API Key\n"+
+				"browser          Browser MCP        true/false\n"+
+				"gemini           Gemini MCP         true/false\n"+
+				"auto_update      Auto-update        true/false\n"+
+				"security_level   locked/strict/moderate/unrestricted\n"+
 				"```\n\n"+
 				"*📝 Examples*\n"+
 				"```\n"+
 				"/set notion_token secret_xxx\n"+
 				"/set gemini true\n"+
+				"/set security_level strict\n"+
 				"/set auto_update false\n"+
 				"/unset brave_key\n"+
 				"```",
@@ -398,11 +400,13 @@ func (d *Dispatcher) handleCommand(ctx context.Context, msg *telego.Message, top
 			browserStatus = "true"
 		}
 		d.reply(chatID, topicID, fmt.Sprintf(
-			"Current MCP settings:\n"+
-				"  github_token = %s\n"+
-				"  notion_token = %s\n"+
-				"  brave_key    = %s\n"+
-				"  browser      = %s",
+			"Current settings:\n"+
+				"  security_level = %s\n"+
+				"  github_token   = %s\n"+
+				"  notion_token   = %s\n"+
+				"  brave_key      = %s\n"+
+				"  browser        = %s",
+			cfg.Security.Level,
 			mask(cfg.MCPs.GitHub.Token),
 			mask(cfg.MCPs.Notion.Token),
 			mask(cfg.MCPs.Brave.APIKey),
@@ -415,7 +419,7 @@ func (d *Dispatcher) handleCommand(ctx context.Context, msg *telego.Message, top
 		}
 		parts := strings.SplitN(args, " ", 2)
 		if len(parts) < 2 || parts[0] == "" || parts[1] == "" {
-			d.reply(chatID, topicID, "Usage: /set <key> <value>\n\nSettable: github_token, notion_token, brave_key, browser, gemini, auto_update")
+			d.reply(chatID, topicID, "Usage: /set <key> <value>\n\nSettable: github_token, notion_token, brave_key, browser, gemini, auto_update, security_level")
 			return
 		}
 		key, value := parts[0], parts[1]
@@ -432,7 +436,7 @@ func (d *Dispatcher) handleCommand(ctx context.Context, msg *telego.Message, top
 			return
 		}
 		if args == "" {
-			d.reply(chatID, topicID, "Usage: /unset <key>\n\nSettable: github_token, notion_token, brave_key, browser, gemini, auto_update")
+			d.reply(chatID, topicID, "Usage: /unset <key>\n\nSettable: github_token, notion_token, brave_key, browser, gemini, auto_update, security_level")
 			return
 		}
 		if err := d.cfgMgr.Set(args, ""); err != nil {
@@ -1132,7 +1136,7 @@ func (d *Dispatcher) isOwnerless() bool {
 	return len(d.botCfg.AllowedUsers) == 0
 }
 
-// claimOwner persists the sender as the bot owner and acknowledges them.
+// claimOwner persists the sender as the bot owner and sends a Telegram-guided setup flow.
 // Called only while the bot is in ownerless mode; subsequent reloads via fsnotify or the in-memory
 // update in ClaimOwner will flip isOwnerless() to false, so this path is only exercised once per bot.
 func (d *Dispatcher) claimOwner(ctx context.Context, msg *telego.Message) {
@@ -1151,8 +1155,35 @@ func (d *Dispatcher) claimOwner(ctx context.Context, msg *telego.Message) {
 	}
 
 	slog.Info("owner claimed", "user_id", userID, "bot", d.botCfg.Name)
-	d.reply(msg.Chat.ID, topicID,
-		"✓ You're now the owner of this bot. Send me anything to get started, or /help for commands.\n\nTo add another user: `/adduser <user_id>`")
+
+	cfg := d.cfgMgr.Get()
+	secLevel := cfg.Security.Level
+	workspace := d.workspace
+
+	d.reply(msg.Chat.ID, topicID, fmt.Sprintf(
+		"⚡ *Welcome! You're the owner of this bot.*\n\n"+
+			"Let's finish setup — everything can be configured right here in Telegram.\n\n"+
+			"*📁 Workspace* (currently: `%s`)\n"+
+			"This is the directory Claude Code has access to.\n"+
+			"Change it by editing `config.json` and restarting.\n\n"+
+			"*🔒 Security* (currently: `%s`)\n"+
+			"`moderate` — auto-approves most ops _(recommended)_\n"+
+			"`strict` — confirms every tool call\n"+
+			"`unrestricted` — no prompts at all\n"+
+			"→ `/set security_level strict`\n\n"+
+			"*🔑 Integrations* _(all optional)_\n"+
+			"```\n"+
+			"/set github_token  ghp_xxx\n"+
+			"/set notion_token  secret_xxx\n"+
+			"/set brave_key     BSA_xxx\n"+
+			"/set browser       true\n"+
+			"/set gemini        true\n"+
+			"```\n\n"+
+			"*👥 Add more users*\n"+
+			"`/adduser <telegram_id>`\n\n"+
+			"All set? Just send me a message to get started. /help for all commands.",
+		workspace, secLevel,
+	))
 }
 
 // handleAddUser processes the /adduser command, adding a new Telegram user ID to allowed_users.

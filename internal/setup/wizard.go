@@ -9,7 +9,6 @@ import (
 	"io"
 	"net/http"
 	"os"
-	"path/filepath"
 	"strings"
 	"time"
 )
@@ -25,10 +24,9 @@ type telegramMeResponse struct {
 
 // wizardConfig is the shape written to config.json.
 type wizardConfig struct {
-	Workspace string        `json:"workspace"`
-	Bots      []wizardBot   `json:"bots"`
-	Security  wizardSec     `json:"security"`
-	MCPs      *wizardMCPs   `json:"mcps,omitempty"`
+	Workspace string      `json:"workspace"`
+	Bots      []wizardBot `json:"bots"`
+	Security  wizardSec   `json:"security"`
 }
 
 type wizardBot struct {
@@ -36,39 +34,20 @@ type wizardBot struct {
 	Token        string  `json:"token"`
 	AllowedUsers []int64 `json:"allowed_users"`
 	DebounceMs   int     `json:"debounce_ms"`
-	OpenAIAPIKey string  `json:"openai_api_key,omitempty"`
 }
 
 type wizardSec struct {
 	Level string `json:"level"`
 }
 
-type wizardMCPs struct {
-	GitHub  *wizardGitHub  `json:"github,omitempty"`
-	Notion  *wizardNotion  `json:"notion,omitempty"`
-}
-
-type wizardGitHub struct {
-	Token string `json:"token"`
-}
-
-type wizardNotion struct {
-	Token string `json:"token"`
-}
-
 // Run runs the interactive setup wizard and writes the resulting config to configPath.
-// Returns the path written so main can pass it to the daemon.
+// Only asks for the bot token — all other settings can be configured via Telegram after first launch.
 func Run(configPath string) error {
 	r := bufio.NewReader(os.Stdin)
 
 	fmt.Println()
-	fmt.Println("⚡ Welcome to claudeclaw — let's get you set up.")
-	fmt.Println("   This will create your config.json. Takes about a minute.")
-	fmt.Println()
-
-	// ── Step 1: Telegram Bot Token ────────────────────────────────────────
-	fmt.Println("Step 1/4 — Telegram Bot Token")
-	fmt.Println("  Don't have a bot? Message @BotFather on Telegram → /newbot")
+	fmt.Println("⚡ Welcome to claudeclaw — one step to get started.")
+	fmt.Println("   Don't have a bot? Message @BotFather on Telegram → /newbot")
 	fmt.Println()
 
 	var token string
@@ -90,71 +69,18 @@ func Run(configPath string) error {
 		break
 	}
 
-	// ── Step 2: Workspace ─────────────────────────────────────────────────
-	fmt.Println("Step 2/4 — Workspace path")
-	fmt.Println("  The directory Claude Code will have access to.")
-	cwd, _ := os.Getwd()
-	fmt.Printf("  Press Enter to use the current directory: %s\n", cwd)
-	fmt.Println()
-
-	workspace := prompt(r, "  Workspace [.]: ")
-	if workspace == "" {
-		workspace = "."
-	}
-	// Expand ~ if provided
-	if strings.HasPrefix(workspace, "~/") {
-		home, _ := os.UserHomeDir()
-		workspace = filepath.Join(home, workspace[2:])
-	}
-	fmt.Println()
-
-	// ── Step 3: Security level ────────────────────────────────────────────
-	fmt.Println("Step 3/4 — Security level")
-	fmt.Println("  moderate     — most operations auto-approved (recommended)")
-	fmt.Println("  strict       — confirms every tool call")
-	fmt.Println("  unrestricted — no confirmations, full access")
-	fmt.Println()
-
-	secLevel := promptDefault(r, "  Security level [moderate]: ", "moderate")
-	secLevel = strings.ToLower(strings.TrimSpace(secLevel))
-	if secLevel != "moderate" && secLevel != "strict" && secLevel != "unrestricted" && secLevel != "locked" {
-		fmt.Printf("  Unknown level %q, defaulting to moderate.\n", secLevel)
-		secLevel = "moderate"
-	}
-	fmt.Println()
-
-	// ── Step 4: Optional tokens ───────────────────────────────────────────
-	fmt.Println("Step 4/4 — Optional integrations (press Enter to skip any)")
-	fmt.Println()
-
-	githubToken := prompt(r, "  GitHub token (for repo/PR/issue access): ")
-	notionToken := prompt(r, "  Notion token (for reading/writing pages): ")
-	openaiKey   := prompt(r, "  OpenAI API key (for voice message transcription): ")
-	fmt.Println()
-
-	// ── Build config ──────────────────────────────────────────────────────
+	// ── Build minimal config ──────────────────────────────────────────────
 	cfg := wizardConfig{
-		Workspace: workspace,
+		Workspace: ".",
 		Bots: []wizardBot{
 			{
 				Name:         "main",
 				Token:        token,
-				AllowedUsers: []int64{}, // 空列表 — 第一个发消息的 Telegram 用户自动成为 owner
+				AllowedUsers: []int64{}, // empty — first sender becomes owner automatically
 				DebounceMs:   1500,
-				OpenAIAPIKey: openaiKey,
 			},
 		},
-		Security: wizardSec{Level: secLevel},
-	}
-
-	if githubToken != "" || notionToken != "" {
-		cfg.MCPs = &wizardMCPs{}
-		if githubToken != "" {
-			cfg.MCPs.GitHub = &wizardGitHub{Token: githubToken}
-		}
-		if notionToken != "" {
-			cfg.MCPs.Notion = &wizardNotion{Token: notionToken}
-		}
+		Security: wizardSec{Level: "moderate"},
 	}
 
 	// ── Write config.json ─────────────────────────────────────────────────
@@ -168,7 +94,7 @@ func Run(configPath string) error {
 
 	fmt.Printf("✓ Config saved to %s\n", configPath)
 	fmt.Println()
-	fmt.Printf("Starting claudeclaw with @%s...\n", botUsername)
+	fmt.Printf("Starting @%s — message it on Telegram to finish setup.\n", botUsername)
 	fmt.Println()
 
 	return nil

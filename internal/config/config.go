@@ -197,12 +197,13 @@ func (m *Manager) OnChange(fn func(newCfg *Config)) {
 // keyAliases maps user-friendly short names to viper config paths.
 // Used by Telegram /set /unset /config commands.
 var keyAliases = map[string]string{
-	"github_token": "mcps.github.token",
-	"notion_token": "mcps.notion.token",
-	"brave_key":    "mcps.brave.api_key",
-	"browser":      "mcps.browser.enabled",
-	"gemini":       "mcps.gemini.enabled",
-	"auto_update":  "auto_update",
+	"github_token":   "mcps.github.token",
+	"notion_token":   "mcps.notion.token",
+	"brave_key":      "mcps.brave.api_key",
+	"browser":        "mcps.browser.enabled",
+	"gemini":         "mcps.gemini.enabled",
+	"auto_update":    "auto_update",
+	"security_level": "security.level",
 }
 
 // Set sets a config value by viper path or user-friendly alias, writes to file, and triggers hot-reload callbacks.
