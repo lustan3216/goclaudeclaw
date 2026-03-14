@@ -143,13 +143,18 @@ func (m *Manager) execute(job Job) Result {
 			slog.Debug("relevant memory injected", "memory_len", len(memContent))
 		}
 
-		// 注入 preferences.md（Claude 为自己提议的行为规则）
+		// Inject preferences.md (behavioral rules Claude has written for itself)
 		if prefsContent, err := localMem.LoadPreferences(); err != nil {
 			slog.Warn("failed to read preferences, skipping", "err", err)
 		} else if prefsContent != "" {
 			prompt = memory.InjectPrefix(prefsContent, prompt)
 			slog.Debug("preferences injected", "prefs_len", len(prefsContent))
 		}
+
+		// Inject bot persona so Claude identifies as "claudeclaw" in Telegram conversations
+		const botPersona = "[claudeclaw context: You are responding via claudeclaw, a Telegram-to-Claude Code bridge. " +
+			"When asked who you are, introduce yourself as claudeclaw. Keep responses concise for chat.]"
+		prompt = memory.InjectPrefix(botPersona, prompt)
 	}
 	job.Prompt = prompt
 
