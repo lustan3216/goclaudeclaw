@@ -123,10 +123,6 @@ Three config knobs control automatic memory lifecycle:
 | `session_summarize_interval` | 0 (off) | Every N completions, Claude summarizes the conversation into `memory.md`, then resets the session — keeping context without bloating the history |
 | `memory_compress_interval` | 0 (off) | Every N memory updates, Claude deduplicates and trims `memory.md` to keep it lean |
 
-### Typing Indicator
-
-While Claude processes a message, the bot sends Telegram's native `••• typing` indicator and refreshes it every 4 seconds until the response is ready. No placeholder messages — just the standard in-chat typing status.
-
 ### Auto Subagent Detection
 
 claudeclaw classifies each message as foreground (quick reply) or background (long task). Long tasks reply immediately and ping you when done. Use `/bg <task>` to force background mode manually.
@@ -134,6 +130,61 @@ claudeclaw classifies each message as foreground (quick reply) or background (lo
 ### Multi-Bot Support
 
 Run multiple bots from a single config — different people, different projects, separate permissions. All bots share the same workspace and memory.
+
+**Creating multiple Telegram bots:**
+
+1. Open [@BotFather](https://t.me/BotFather) on Telegram
+2. Send `/newbot` for each bot you need
+3. Follow the prompts to set name and username
+4. Copy the token for each bot into `config.json`
+
+**Example scenarios:**
+
+```
+┌─────────────────────────────────────────────────────┐
+│                    config.json                      │
+│                                                     │
+│  bot: "personal"          bot: "work"               │
+│  ┌──────────────┐         ┌──────────────┐          │
+│  │ @my_claude   │         │ @team_claude │          │
+│  │              │         │              │          │
+│  │ allowed: you │         │ allowed: you │          │
+│  │              │         │         + 3  │          │
+│  │ debounce 1.5s│         │ teammates    │          │
+│  └──────────────┘         └──────────────┘          │
+│         │                        │                  │
+│    Personal use             Shared with team        │
+│    Full trust               Shared workspace        │
+└─────────────────────────────────────────────────────┘
+```
+
+**Scenario 1 — Solo developer:**
+One bot, just for you. Full trust, `security: unrestricted`, no friction.
+
+**Scenario 2 — Team access:**
+A second bot with teammates in `allowed_users`. Set `security: moderate` so sensitive operations still require confirmation. Both bots share the same codebase and memory — teammates see the same project context you do.
+
+**Scenario 3 — Dedicated task bot:**
+A third bot wired to a specific sub-project. Same machine, different `workspace` path per bot. Run code reviews in one thread, infrastructure ops in another — fully parallel, no queue.
+
+```json
+{
+  "bots": [
+    {
+      "name": "personal",
+      "token": "BOT_TOKEN_1",
+      "allowed_users": [111111111],
+      "debounce_ms": 1500
+    },
+    {
+      "name": "team",
+      "token": "BOT_TOKEN_2",
+      "allowed_users": [111111111, 222222222, 333333333],
+      "debounce_ms": 500
+    }
+  ]
+}
+```
 
 ### Heartbeat
 
