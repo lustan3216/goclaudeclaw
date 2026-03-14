@@ -787,7 +787,7 @@ func (d *Dispatcher) dispatchJob(ctx context.Context, chatID int64, topicID int,
 			d.react(chatID, replyToID, "✅")
 			d.sendOutputTo(chatID, topicID, replyToID, result.Output)
 			d.maybeUpdateMemory(ctx, chatID, topicID)
-			d.maybeSummarizeSession(ctx, chatID, topicID)
+			d.maybeSummarizeSession(ctx, chatID, topicID, result.InputTokens)
 		}()
 		return
 	}
@@ -861,7 +861,7 @@ func (d *Dispatcher) dispatchJob(ctx context.Context, chatID int64, topicID int,
 	d.react(chatID, replyToID, "✅")
 	d.sendOutputTo(chatID, topicID, replyToID, result.Output)
 	d.maybeUpdateMemory(ctx, chatID, topicID)
-	d.maybeSummarizeSession(ctx, chatID, topicID)
+	d.maybeSummarizeSession(ctx, chatID, topicID, result.InputTokens)
 }
 
 // maybeUpdateMemory silently triggers a memory.md update every N successful completions.
@@ -968,21 +968,32 @@ func (d *Dispatcher) maybeCompressMemory(ctx context.Context, chatID int64, topi
 	}()
 }
 
-// maybeSummarizeSession summarizes the conversation into memory.md and resets the session every N completions.
+// maybeSummarizeSession summarizes the conversation into memory.md and resets the session.
+// Triggers on two conditions (whichever comes first):
+//   - every N completions (SessionSummarizeInterval)
+//   - when input tokens exceed max_session_tokens threshold
+//
 // The next conversation starts from a fresh session, but continuity is maintained via memory.md injection.
-func (d *Dispatcher) maybeSummarizeSession(ctx context.Context, chatID int64, topicID int) {
-	interval := d.botCfg.SessionSummarizeInterval
-	if interval <= 0 {
-		return
-	}
-
+func (d *Dispatcher) maybeSummarizeSession(ctx context.Context, chatID int64, topicID int, inputTokens int) {
 	key := chatTopicKey{chatID, topicID}
 	d.countsMu.Lock()
 	count := d.completionCounts[key]
 	d.countsMu.Unlock()
 
-	if count%interval != 0 {
+	interval := d.botCfg.SessionSummarizeInterval
+	maxTokens := d.botCfg.MaxSessionTokens
+
+	tokenTriggered := maxTokens > 0 && inputTokens > 0 && inputTokens >= maxTokens
+	countTriggered := interval > 0 && count%interval == 0
+
+	if !tokenTriggered && !countTriggered {
 		return
+	}
+
+	if tokenTriggered {
+		slog.Info("session token threshold exceeded, triggering early summarize+reset",
+			"input_tokens", inputTokens, "max_session_tokens", maxTokens,
+			"chat_id", chatID, "topic_id", topicID)
 	}
 
 	slog.Info("triggering conversation summarize and session reset", "chat_id", chatID, "topic_id", topicID, "count", count)

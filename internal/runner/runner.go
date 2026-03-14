@@ -19,8 +19,9 @@ import (
 
 // Result holds the claude execution result.
 type Result struct {
-	Output string
-	Err    error
+	Output      string
+	Err         error
+	InputTokens int // total input tokens used (input + cache_read); 0 if unknown
 }
 
 // Job is the unit of work submitted to the serial queue.
@@ -36,11 +37,18 @@ type Job struct {
 }
 
 // claudeJSONOutput is the output structure of claude --output-format json.
-// Used to capture session_id for new sessions.
 type claudeJSONOutput struct {
-	SessionID string `json:"session_id"`
-	Result    string `json:"result"`
-	// Other fields can be added as needed
+	SessionID string              `json:"session_id"`
+	Result    string              `json:"result"`
+	Usage     claudeJSONUsage     `json:"usage"`
+}
+
+// claudeJSONUsage holds token counts from a claude execution.
+type claudeJSONUsage struct {
+	InputTokens            int `json:"input_tokens"`
+	CacheReadInputTokens   int `json:"cache_read_input_tokens"`
+	CacheCreateInputTokens int `json:"cache_creation_input_tokens"`
+	OutputTokens           int `json:"output_tokens"`
 }
 
 // queueKey uniquely identifies a serial queue: each chat+topic has its own queue and doesn't block others.
@@ -225,7 +233,7 @@ func (m *Manager) execute(job Job) Result {
 
 	rawOutput := strings.TrimSpace(outputBuilder.String())
 
-	// New session: parse JSON output to extract session_id
+	// New session: parse JSON output to extract session_id and token usage
 	if isNewSession {
 		if jsonOut, err := parseJSONOutput(rawOutput); err == nil && jsonOut.SessionID != "" {
 			if err := m.sessions.Set(job.Workspace, job.BotName, job.ChatID, job.TopicID, jsonOut.SessionID); err != nil {
@@ -237,7 +245,8 @@ func (m *Manager) execute(job Job) Result {
 					"chat_id", job.ChatID,
 					"topic_id", job.TopicID)
 			}
-			return Result{Output: strings.TrimSpace(jsonOut.Result)}
+			totalIn := jsonOut.Usage.InputTokens + jsonOut.Usage.CacheReadInputTokens + jsonOut.Usage.CacheCreateInputTokens
+			return Result{Output: strings.TrimSpace(jsonOut.Result), InputTokens: totalIn}
 		}
 		// JSON parse failed: fallback to legacy session ID extraction
 		if newID := extractSessionID(rawOutput); newID != "" {

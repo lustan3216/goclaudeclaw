@@ -23,6 +23,7 @@ type BotConfig struct {
 	MemoryUpdateInterval      int `mapstructure:"memory_update_interval"`      // update memory.md every N successful completions; 0 = disabled
 	SessionSummarizeInterval  int `mapstructure:"session_summarize_interval"`  // summarize conversation and reset session every N completions; 0 = disabled
 	MemoryCompressInterval    int `mapstructure:"memory_compress_interval"`    // compress memory.md every N memory updates; 0 = disabled
+	MaxSessionTokens          int `mapstructure:"max_session_tokens"`          // force summarize+reset when input tokens exceed this; 0 = disabled (recommended: 80000)
 }
 
 // MCPsConfig holds preset MCP server configs; leaving token empty disables that server.
