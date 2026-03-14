@@ -17,9 +17,8 @@ import (
 type BotConfig struct {
 	Name                string  `mapstructure:"name"`
 	Token               string  `mapstructure:"token"`
-	AllowedUsers        []int64 `mapstructure:"allowed_users"`
-	DebounceMs          int     `mapstructure:"debounce_ms"`
-	OpenAIAPIKey        string  `mapstructure:"openai_api_key"`        // Whisper voice transcription; reads OPENAI_API_KEY env var if empty
+	AllowedUsers  []int64 `mapstructure:"allowed_users"`
+	OpenAIAPIKey  string  `mapstructure:"openai_api_key"` // Whisper voice transcription; reads OPENAI_API_KEY env var if empty
 	MemoryUpdateInterval   int `mapstructure:"memory_update_interval"`   // update memory.md every N successful completions; 0 = disabled
 	MemoryCompressInterval int `mapstructure:"memory_compress_interval"` // compress memory.md every N memory updates; 0 = disabled
 	MaxSessionTokens       int `mapstructure:"max_session_tokens"`       // reset session when input tokens exceed this; default 60000

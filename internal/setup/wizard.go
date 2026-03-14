@@ -33,7 +33,6 @@ type wizardBot struct {
 	Name         string  `json:"name"`
 	Token        string  `json:"token"`
 	AllowedUsers []int64 `json:"allowed_users"`
-	DebounceMs   int     `json:"debounce_ms"`
 }
 
 type wizardSec struct {
@@ -77,7 +76,6 @@ func Run(configPath string) error {
 				Name:         "main",
 				Token:        token,
 				AllowedUsers: []int64{}, // empty — first sender becomes owner automatically
-				DebounceMs:   1500,
 			},
 		},
 		Security: wizardSec{Level: "moderate"},

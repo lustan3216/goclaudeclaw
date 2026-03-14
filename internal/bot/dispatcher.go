@@ -29,17 +29,7 @@ import (
 	"github.com/lustan3216/claudeclaw/internal/session"
 )
 
-// incomingMsg is a raw message collected within a debounce window.
-type incomingMsg struct {
-	text       string
-	from       string
-	chatID     int64
-	topicID    int // 0 = regular chat, >0 = forum topic ID
-	messageID  int // used to reply to a specific message
-	receivedAt time.Time
-}
-
-// chatTopicKey uniquely identifies a chat+topic for debouncing/session keying.
+// chatTopicKey uniquely identifies a chat+topic for session keying.
 type chatTopicKey struct {
 	chatID  int64
 	topicID int
@@ -60,18 +50,10 @@ var httpClient = &http.Client{Timeout: 60 * time.Second}
 // downloadClient for Telegram file downloads, 120s timeout.
 var downloadClient = &http.Client{Timeout: 120 * time.Second}
 
-// debounceState tracks the debounce state for each chat+topic.
-type debounceState struct {
-	timer    *time.Timer
-	messages []incomingMsg
-	mu       sync.Mutex
-}
-
-// Dispatcher handles message routing and debounce aggregation.
+// Dispatcher handles message routing and task dispatch.
 // Each bot instance shares one Dispatcher, distinguished by chatID+topicID.
 type Dispatcher struct {
-	mu       sync.Mutex
-	debounce map[chatTopicKey]*debounceState // chat+topic → debounce state
+	mu sync.Mutex
 
 	countsMu         sync.Mutex
 	completionCounts map[chatTopicKey]int // chat+topic → successful completion count (triggers memory update)
@@ -104,7 +86,6 @@ func NewDispatcher(
 	workspace string,
 ) *Dispatcher {
 	return &Dispatcher{
-		debounce:         make(map[chatTopicKey]*debounceState),
 		completionCounts: make(map[chatTopicKey]int),
 		cancelReactions:  make(map[int]cancelEntry),
 		runnerMgr:        runnerMgr,
@@ -126,7 +107,7 @@ func (d *Dispatcher) UpdateConfig(cfg *config.Config, botCfg config.BotConfig) {
 	d.botCfg = botCfg
 }
 
-// Handle receives a single message from Telegram and enters it into the debounce queue.
+// Handle receives a single message from Telegram and dispatches it immediately.
 func (d *Dispatcher) Handle(ctx context.Context, update telego.Update) {
 	// Handle reaction cancellation: user reacts with 😱 or 😭 to cancel an in-progress task
 	if update.MessageReaction != nil {
@@ -210,14 +191,10 @@ func (d *Dispatcher) Handle(ctx context.Context, update telego.Update) {
 			return
 		}
 		text := "[Voice transcription]: " + voiceText
-		d.enqueueWithDebounce(ctx, chatTopicKey{msg.Chat.ID, topicID}, incomingMsg{
-			text:       text,
-			from:       msg.From.Username,
-			chatID:     msg.Chat.ID,
-			topicID:    topicID,
-			messageID:  msg.MessageID,
-			receivedAt: time.Now(),
-		})
+		go func() {
+			mode := d.classifier.Classify(ctx, text)
+			d.dispatchJob(ctx, msg.Chat.ID, topicID, msg.MessageID, text, mode)
+		}()
 		return
 	}
 
@@ -250,14 +227,10 @@ func (d *Dispatcher) Handle(ctx context.Context, update telego.Update) {
 		if caption != "" {
 			text += "\n" + caption
 		}
-		d.enqueueWithDebounce(ctx, chatTopicKey{msg.Chat.ID, topicID}, incomingMsg{
-			text:       text,
-			from:       msg.From.Username,
-			chatID:     msg.Chat.ID,
-			topicID:    topicID,
-			messageID:  msg.MessageID,
-			receivedAt: time.Now(),
-		})
+		go func() {
+			mode := d.classifier.Classify(ctx, text)
+			d.dispatchJob(ctx, msg.Chat.ID, topicID, msg.MessageID, text, mode)
+		}()
 		return
 	}
 
@@ -288,14 +261,10 @@ func (d *Dispatcher) Handle(ctx context.Context, update telego.Update) {
 		if caption != "" {
 			text += "\n" + caption
 		}
-		d.enqueueWithDebounce(ctx, chatTopicKey{msg.Chat.ID, topicID}, incomingMsg{
-			text:       text,
-			from:       msg.From.Username,
-			chatID:     msg.Chat.ID,
-			topicID:    topicID,
-			messageID:  msg.MessageID,
-			receivedAt: time.Now(),
-		})
+		go func() {
+			mode := d.classifier.Classify(ctx, text)
+			d.dispatchJob(ctx, msg.Chat.ID, topicID, msg.MessageID, text, mode)
+		}()
 		return
 	}
 
@@ -304,14 +273,10 @@ func (d *Dispatcher) Handle(ctx context.Context, update telego.Update) {
 		return
 	}
 
-	d.enqueueWithDebounce(ctx, chatTopicKey{msg.Chat.ID, topicID}, incomingMsg{
-		text:       text,
-		from:       msg.From.Username,
-		chatID:     msg.Chat.ID,
-		topicID:    topicID,
-		messageID:  msg.MessageID,
-		receivedAt: time.Now(),
-	})
+	go func() {
+		mode := d.classifier.Classify(ctx, text)
+		d.dispatchJob(ctx, msg.Chat.ID, topicID, msg.MessageID, text, mode)
+	}()
 }
 
 // parseCommand detects whether a message is a bot command.
@@ -656,61 +621,6 @@ func (d *Dispatcher) buildUsageReport() string {
 		fmtK(totalStats.cacheCreate), fmtK(totalStats.cacheRead),
 		totalStats.messages, totalStats.sessions,
 	)
-}
-
-// enqueueWithDebounce adds a message to the debounce window.
-// Messages arriving within debounce_ms for the same chat+topic are merged into one and sent to claude.
-func (d *Dispatcher) enqueueWithDebounce(ctx context.Context, key chatTopicKey, msg incomingMsg) {
-	debounceMs := d.botCfg.DebounceMs
-	if debounceMs <= 0 {
-		debounceMs = 1500 // default 1.5s
-	}
-	delay := time.Duration(debounceMs) * time.Millisecond
-
-	d.mu.Lock()
-	state, ok := d.debounce[key]
-	if !ok {
-		state = &debounceState{}
-		d.debounce[key] = state
-	}
-	d.mu.Unlock()
-
-	state.mu.Lock()
-	defer state.mu.Unlock()
-
-	state.messages = append(state.messages, msg)
-
-	// Reset the timer: restart countdown when a new message arrives
-	if state.timer != nil {
-		state.timer.Stop()
-	}
-	state.timer = time.AfterFunc(delay, func() {
-		state.mu.Lock()
-		msgs := state.messages
-		state.messages = nil
-		state.mu.Unlock()
-
-		if len(msgs) == 0 {
-			return
-		}
-
-		combined := combineMessages(msgs)
-		slog.Info("debounce window fired",
-			"chat_id", key.chatID,
-			"topic_id", key.topicID,
-			"message_count", len(msgs),
-			"combined_len", len(combined),
-			"bot", d.botCfg.Name)
-
-		// Use the last message's ID as the reply target
-		lastMsgID := msgs[len(msgs)-1].messageID
-
-		// Classify and dispatch asynchronously, without blocking the debounce goroutine
-		go func() {
-			mode := d.classifier.Classify(ctx, combined)
-			d.dispatchJob(ctx, key.chatID, key.topicID, lastMsgID, combined, mode)
-		}()
-	})
 }
 
 // dispatchJob submits a job to the runner and handles Telegram replies.
@@ -1362,18 +1272,3 @@ func currentYearMonth() string {
 	return time.Now().UTC().Format("2006-01")
 }
 
-// combineMessages merges multiple messages into one, joined in chronological order.
-// Multiple messages are separated by newlines so claude understands the context.
-func combineMessages(msgs []incomingMsg) string {
-	if len(msgs) == 1 {
-		return msgs[0].text
-	}
-	var sb strings.Builder
-	for i, m := range msgs {
-		if i > 0 {
-			sb.WriteString("\n")
-		}
-		sb.WriteString(m.text)
-	}
-	return sb.String()
-}

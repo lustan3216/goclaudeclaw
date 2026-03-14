@@ -5,14 +5,12 @@
       "name": "main",
       "token": "TOKEN_1",
       "allowed_users": [123456789],
-      "debounce_ms": 1500,
       "openai_api_key": ""
     },
     {
       "name": "work",
       "token": "TOKEN_2",
       "allowed_users": [123456789, 987654321],
-      "debounce_ms": 500,
       "openai_api_key": ""
     }
   ],
