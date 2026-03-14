@@ -845,11 +845,15 @@ func (d *Dispatcher) dispatchJob(ctx context.Context, chatID int64, topicID int,
 
 	result := <-resultCh
 	close(typingDone)
+
+	// Check cancellation BEFORE calling cleanup (which itself calls jobCancel).
+	// If already cancelled (user reacted with 😱/😭), handleReactionCancel already sent a reply.
+	if jobCtx.Err() != nil {
+		cleanup()
+		return
+	}
 	cleanup()
 
-	if jobCtx.Err() != nil {
-		return // already cancelled via reaction; reply sent by handleReactionCancel
-	}
 	if result.Err != nil {
 		d.replyTo(chatID, topicID, replyToID, fmt.Sprintf("❌ Execution failed: %v", result.Err))
 		return
