@@ -7,7 +7,7 @@
   },
   "repository": {
     "type": "git",
-    "url": "https://github.com/lustan3216/goclaudeclaw"
+    "url": "https://github.com/lustan3216/claudeclaw"
   },
   "keywords": ["claude", "telegram", "bot", "claudeclaw", "claude-code"],
   "license": "MIT"

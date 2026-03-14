@@ -337,7 +337,7 @@ func (d *Dispatcher) handleCommand(ctx context.Context, msg *telego.Message, top
 	switch cmd {
 	case "start", "help":
 		d.reply(chatID, topicID, fmt.Sprintf(
-			"⚡ *goclaudeclaw* `%s`\n\n"+
+			"⚡ *claudeclaw* `%s`\n\n"+
 				"*💬 Chat*\n"+
 				"Send any message to talk to Claude\n"+
 				"`/clear`          Clear session and reload MCP\n"+
@@ -472,7 +472,7 @@ func (d *Dispatcher) handleCommand(ctx context.Context, msg *telego.Message, top
 }
 
 // buildUsageReport calculates today's token usage from ~/.claude/projects/.
-// triggerAutoUpdate checks GitHub for new commits and, if found, git pulls + rebuilds → goclaudeclaw.new in the background.
+// triggerAutoUpdate checks GitHub for new commits and, if found, git pulls + rebuilds → claudeclaw.new in the background.
 // Uses autoUpdateRunning flag to prevent concurrency.
 func (d *Dispatcher) triggerAutoUpdate() {
 	d.autoUpdateMu.Lock()
@@ -535,12 +535,12 @@ func (d *Dispatcher) triggerAutoUpdate() {
 	}
 
 	ldflags := "-X github.com/lustan3216/claudeclaw/internal/buildinfo.Version=" + version
-	buildCmd := exec.Command(gobin, "build", "-ldflags", ldflags, "-o", filepath.Join(d.workspace, "goclaudeclaw.new"), "./cmd/goclaudeclaw/")
+	buildCmd := exec.Command(gobin, "build", "-ldflags", ldflags, "-o", filepath.Join(d.workspace, "claudeclaw.new"), "./cmd/claudeclaw/")
 	buildCmd.Dir = d.workspace
 	buildCmd.Env = os.Environ()
 	if err := buildCmd.Run(); err != nil {
 		slog.Warn("auto_update: build failed", "err", err)
-		_ = os.Remove(filepath.Join(d.workspace, "goclaudeclaw.new"))
+		_ = os.Remove(filepath.Join(d.workspace, "claudeclaw.new"))
 		return
 	}
 	slog.Info("auto_update: new version ready, will take effect on next restart", "version", version)

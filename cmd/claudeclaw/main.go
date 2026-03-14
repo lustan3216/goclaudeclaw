@@ -1,4 +1,4 @@
-// goclaudeclaw — Telegram ↔ Claude Code CLI bridge daemon
+// claudeclaw — Telegram ↔ Claude Code CLI bridge daemon
 //
 // Key features:
 //   - Multi-bot support (each bot runs in its own goroutine)
@@ -52,9 +52,9 @@ func newRootCmd() *cobra.Command {
 	flags := &cliFlags{}
 
 	root := &cobra.Command{
-		Use:     "goclaudeclaw",
+		Use:     "claudeclaw",
 		Short:   "Telegram ↔ Claude Code CLI bridge daemon",
-		Long:    `goclaudeclaw bridges Telegram bots to Claude Code CLI with shared memory, cron scheduling, and multi-bot support.`,
+		Long:    `claudeclaw bridges Telegram bots to Claude Code CLI with shared memory, cron scheduling, and multi-bot support.`,
 		Version: version,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return run(flags)
@@ -77,7 +77,7 @@ func newRootCmd() *cobra.Command {
 func run(flags *cliFlags) error {
 	daemon.SetupLogger(flags.debug)
 
-	slog.Info("goclaudeclaw starting", "version", version, "config", flags.configPath)
+	slog.Info("claudeclaw starting", "version", version, "config", flags.configPath)
 
 	// ── 1. Load config ────────────────────────────────────────────────
 	cfgManager, err := config.New(flags.configPath)
@@ -191,7 +191,7 @@ func newVersionCmd() *cobra.Command {
 		Use:   "version",
 		Short: "Print version info",
 		Run: func(cmd *cobra.Command, args []string) {
-			fmt.Printf("goclaudeclaw %s\n", version)
+			fmt.Printf("claudeclaw %s\n", version)
 		},
 	}
 }

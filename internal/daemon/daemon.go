@@ -19,7 +19,7 @@ type PIDFile struct {
 }
 
 // NewPIDFile creates a PID file manager.
-// path is the PID file path, e.g. "/var/run/goclaudeclaw.pid".
+// path is the PID file path, e.g. "/var/run/claudeclaw.pid".
 func NewPIDFile(path string) *PIDFile {
 	return &PIDFile{path: path}
 }

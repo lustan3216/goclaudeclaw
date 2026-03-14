@@ -25,17 +25,17 @@ jobs:
 
           for GOOS in linux darwin; do
             for GOARCH in amd64 arm64; do
-              OUT="dist/goclaudeclaw_${VERSION}_${GOOS}_${GOARCH}.tar.gz"
+              OUT="dist/claudeclaw_${VERSION}_${GOOS}_${GOARCH}.tar.gz"
               BINARY="claudeclaw"
-              CGO_ENABLED=0 GOOS=$GOOS GOARCH=$GOARCH go build -ldflags "$LDFLAGS" -o "$BINARY" ./cmd/goclaudeclaw/
+              CGO_ENABLED=0 GOOS=$GOOS GOARCH=$GOARCH go build -ldflags "$LDFLAGS" -o "$BINARY" ./cmd/claudeclaw/
               tar -czf "$OUT" "$BINARY"
               rm "$BINARY"
             done
           done
 
-          CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -ldflags "$LDFLAGS" -o goclaudeclaw.exe ./cmd/goclaudeclaw/
-          zip "dist/goclaudeclaw_${VERSION}_windows_amd64.zip" goclaudeclaw.exe
-          rm goclaudeclaw.exe
+          CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -ldflags "$LDFLAGS" -o claudeclaw.exe ./cmd/claudeclaw/
+          zip "dist/claudeclaw_${VERSION}_windows_amd64.zip" claudeclaw.exe
+          rm claudeclaw.exe
 
           cd dist && sha256sum * > checksums.txt
 
@@ -46,5 +46,5 @@ jobs:
           VERSION="${GITHUB_REF_NAME}"
           NOTES=$(git log $(git describe --tags --abbrev=0 HEAD^)..HEAD --oneline 2>/dev/null || echo "Initial release")
           gh release create "$VERSION" dist/* \
-            --title "goclaudeclaw $VERSION" \
+            --title "claudeclaw $VERSION" \
             --notes "$NOTES"

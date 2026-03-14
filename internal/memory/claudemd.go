@@ -12,9 +12,9 @@ import (
 
 const (
 	// ManagedBlockStart is the start marker for the managed block.
-	ManagedBlockStart = "<!-- goclaudeclaw:managed:start -->"
+	ManagedBlockStart = "<!-- claudeclaw:managed:start -->"
 	// ManagedBlockEnd is the end marker for the managed block.
-	ManagedBlockEnd = "<!-- goclaudeclaw:managed:end -->"
+	ManagedBlockEnd = "<!-- claudeclaw:managed:end -->"
 
 	claudeMDFilename = "CLAUDE.md"
 )
