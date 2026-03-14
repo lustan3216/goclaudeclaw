@@ -10,7 +10,6 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"time"
 )
@@ -68,7 +67,7 @@ func Run(configPath string) error {
 	fmt.Println()
 
 	// ── Step 1: Telegram Bot Token ────────────────────────────────────────
-	fmt.Println("Step 1/5 — Telegram Bot Token")
+	fmt.Println("Step 1/4 — Telegram Bot Token")
 	fmt.Println("  Don't have a bot? Message @BotFather on Telegram → /newbot")
 	fmt.Println()
 
@@ -91,26 +90,8 @@ func Run(configPath string) error {
 		break
 	}
 
-	// ── Step 2: Allowed User ID ───────────────────────────────────────────
-	fmt.Println("Step 2/5 — Your Telegram User ID")
-	fmt.Println("  To find your ID: message @userinfobot on Telegram.")
-	fmt.Println()
-
-	var userID int64
-	for {
-		raw := prompt(r, "  Your user ID: ")
-		n, err := strconv.ParseInt(strings.TrimSpace(raw), 10, 64)
-		if err != nil || n <= 0 {
-			fmt.Println("  Please enter a valid numeric user ID.")
-			continue
-		}
-		userID = n
-		break
-	}
-	fmt.Println()
-
-	// ── Step 3: Workspace ─────────────────────────────────────────────────
-	fmt.Println("Step 3/5 — Workspace path")
+	// ── Step 2: Workspace ─────────────────────────────────────────────────
+	fmt.Println("Step 2/4 — Workspace path")
 	fmt.Println("  The directory Claude Code will have access to.")
 	cwd, _ := os.Getwd()
 	fmt.Printf("  Press Enter to use the current directory: %s\n", cwd)
@@ -127,8 +108,8 @@ func Run(configPath string) error {
 	}
 	fmt.Println()
 
-	// ── Step 4: Security level ────────────────────────────────────────────
-	fmt.Println("Step 4/5 — Security level")
+	// ── Step 3: Security level ────────────────────────────────────────────
+	fmt.Println("Step 3/4 — Security level")
 	fmt.Println("  moderate     — most operations auto-approved (recommended)")
 	fmt.Println("  strict       — confirms every tool call")
 	fmt.Println("  unrestricted — no confirmations, full access")
@@ -142,8 +123,8 @@ func Run(configPath string) error {
 	}
 	fmt.Println()
 
-	// ── Step 5: Optional tokens ───────────────────────────────────────────
-	fmt.Println("Step 5/5 — Optional integrations (press Enter to skip any)")
+	// ── Step 4: Optional tokens ───────────────────────────────────────────
+	fmt.Println("Step 4/4 — Optional integrations (press Enter to skip any)")
 	fmt.Println()
 
 	githubToken := prompt(r, "  GitHub token (for repo/PR/issue access): ")
@@ -158,7 +139,7 @@ func Run(configPath string) error {
 			{
 				Name:         "main",
 				Token:        token,
-				AllowedUsers: []int64{userID},
+				AllowedUsers: []int64{}, // 空列表 — 第一个发消息的 Telegram 用户自动成为 owner
 				DebounceMs:   1500,
 				OpenAIAPIKey: openaiKey,
 			},

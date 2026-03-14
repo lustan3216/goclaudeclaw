@@ -16,6 +16,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -138,14 +139,19 @@ func (d *Dispatcher) Handle(ctx context.Context, update telego.Update) {
 	}
 	msg := update.Message
 
-	// Auth: only process users in allowed_users
-	if msg.From == nil || !d.isAllowed(msg.From.ID) {
-		if msg.From != nil {
-			slog.Warn("rejected unauthorized user",
-				"user_id", msg.From.ID,
-				"username", msg.From.Username,
-				"bot", d.botCfg.Name)
-		}
+	if msg.From == nil {
+		return
+	}
+
+	// 无主模式：第一个发送消息的用户成为 owner
+	if d.isOwnerless() {
+		d.claimOwner(ctx, msg)
+		return
+	}
+
+	// 权限检查：未授权用户静默丢弃，不作任何响应
+	if !d.isAllowed(msg.From.ID) {
+		slog.Debug("silently dropped unauthorized user", "user_id", msg.From.ID, "bot", d.botCfg.Name)
 		return
 	}
 
@@ -345,6 +351,8 @@ func (d *Dispatcher) handleCommand(ctx context.Context, msg *telego.Message, top
 				"`/status`         Show runtime status\n"+
 				"`/usage`          Today's token usage stats\n"+
 				"😱 or 😭           React to a message being processed to cancel the task\n\n"+
+				"*👥 Access*\n"+
+				"`/adduser <id>`   Add a user by their Telegram ID\n\n"+
 				"*🔄 Updates*\n"+
 				"`/update`                      Restart and pull latest version\n"+
 				"`/set auto_update false`  Disable background auto-update check on each message\n\n"+
@@ -466,6 +474,8 @@ func (d *Dispatcher) handleCommand(ctx context.Context, msg *telego.Message, top
 		d.dispatchJob(ctx, chatID, topicID, msg.MessageID, args, runner.ModeBackground)
 	case "usage":
 		d.reply(chatID, topicID, d.buildUsageReport())
+	case "adduser":
+		d.handleAddUser(ctx, msg, topicID, args)
 	default:
 		d.reply(chatID, topicID, "Unknown command, send /help to see available commands.")
 	}
@@ -1100,6 +1110,61 @@ func (d *Dispatcher) isAllowed(userID int64) bool {
 		}
 	}
 	return false
+}
+
+// isOwnerless returns true when allowed_users is empty, meaning the bot is awaiting its first owner.
+// This is checked under the dispatcher lock to be concurrency-safe.
+func (d *Dispatcher) isOwnerless() bool {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return len(d.botCfg.AllowedUsers) == 0
+}
+
+// claimOwner persists the sender as the bot owner and acknowledges them.
+// Called only while the bot is in ownerless mode; subsequent reloads via fsnotify or the in-memory
+// update in ClaimOwner will flip isOwnerless() to false, so this path is only exercised once per bot.
+func (d *Dispatcher) claimOwner(ctx context.Context, msg *telego.Message) {
+	userID := msg.From.ID
+	topicID := 0
+	if msg.IsTopicMessage {
+		topicID = msg.MessageThreadID
+	}
+
+	if d.cfgMgr == nil {
+		return
+	}
+	if err := d.cfgMgr.ClaimOwner(d.botCfg.Name, userID); err != nil {
+		slog.Error("failed to claim owner", "err", err, "user_id", userID, "bot", d.botCfg.Name)
+		return
+	}
+
+	slog.Info("owner claimed", "user_id", userID, "bot", d.botCfg.Name)
+	d.reply(msg.Chat.ID, topicID,
+		"✓ You're now the owner of this bot. Send me anything to get started, or /help for commands.\n\nTo add another user: `/adduser <user_id>`")
+}
+
+// handleAddUser processes the /adduser command, adding a new Telegram user ID to allowed_users.
+func (d *Dispatcher) handleAddUser(ctx context.Context, msg *telego.Message, topicID int, args string) {
+	chatID := msg.Chat.ID
+	args = strings.TrimSpace(args)
+	if args == "" {
+		d.reply(chatID, topicID, "Usage: `/adduser <telegram_user_id>`\nTip: ask them to message @userinfobot to get their ID.")
+		return
+	}
+	newID, err := strconv.ParseInt(args, 10, 64)
+	if err != nil || newID <= 0 {
+		d.reply(chatID, topicID, "❌ Invalid user ID. Must be a number, e.g. `/adduser 123456789`")
+		return
+	}
+	if d.cfgMgr == nil {
+		d.reply(chatID, topicID, "❌ Config manager unavailable")
+		return
+	}
+	if err := d.cfgMgr.ClaimOwner(d.botCfg.Name, newID); err != nil {
+		d.reply(chatID, topicID, fmt.Sprintf("❌ Failed to add user: %v", err))
+		return
+	}
+	d.reply(chatID, topicID, fmt.Sprintf("✓ User `%d` added.", newID))
 }
 
 // openAIAPIKey returns a valid OpenAI API key: prefers BotConfig field, then falls back to env var.

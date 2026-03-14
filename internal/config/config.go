@@ -3,8 +3,10 @@
 package config
 
 import (
+	"encoding/json"
 	"fmt"
 	"log/slog"
+	"os"
 	"sync"
 
 	"github.com/fsnotify/fsnotify"
@@ -124,6 +126,7 @@ type Manager struct {
 	mu      sync.RWMutex
 	current *Config
 	viper   *viper.Viper
+	path    string // absolute path to the config file, used by ClaimOwner for atomic JSON writes
 
 	// onChange is called after a successful config reload, allowing upper-layer components to react to changes.
 	onChange []func(newCfg *Config)
@@ -148,6 +151,7 @@ func New(configPath string) (*Manager, error) {
 	m := &Manager{
 		current: cfg,
 		viper:   v,
+		path:    configPath,
 	}
 
 	// Start hot-reload: viper watches for file changes via fsnotify
@@ -235,6 +239,93 @@ func KnownAliases() map[string]string {
 	return out
 }
 
+// ClaimOwner appends userID to the named bot's allowed_users list, persisting the change atomically.
+// It is safe to call for both first-owner claiming and /adduser additions.
+// The method operates on raw JSON to avoid viper's unreliable nested-array serialisation.
+func (m *Manager) ClaimOwner(botName string, userID int64) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	// 读取原始 JSON 文件
+	raw, err := os.ReadFile(m.path)
+	if err != nil {
+		return fmt.Errorf("failed to read config file: %w", err)
+	}
+
+	// 解析为通用 map 以便安全操作嵌套数组
+	var root map[string]any
+	if err := json.Unmarshal(raw, &root); err != nil {
+		return fmt.Errorf("failed to parse config JSON: %w", err)
+	}
+
+	// 定位目标 bot 并追加 userID
+	botsRaw, _ := root["bots"].([]any)
+	found := false
+	for _, b := range botsRaw {
+		botMap, ok := b.(map[string]any)
+		if !ok {
+			continue
+		}
+		name, _ := botMap["name"].(string)
+		if name != botName {
+			continue
+		}
+
+		// 检查是否已存在，避免重复
+		existing, _ := botMap["allowed_users"].([]any)
+		for _, v := range existing {
+			switch id := v.(type) {
+			case float64:
+				if int64(id) == userID {
+					return nil // 已存在，幂等返回
+				}
+			case int64:
+				if id == userID {
+					return nil
+				}
+			}
+		}
+		botMap["allowed_users"] = append(existing, userID)
+		found = true
+		break
+	}
+	if !found {
+		return fmt.Errorf("bot %q not found in config", botName)
+	}
+
+	// 序列化并原子写回（写临时文件后 rename）
+	updated, err := json.MarshalIndent(root, "", "  ")
+	if err != nil {
+		return fmt.Errorf("failed to encode config: %w", err)
+	}
+	tmpPath := m.path + ".tmp"
+	if err := os.WriteFile(tmpPath, updated, 0o600); err != nil {
+		return fmt.Errorf("failed to write temp config: %w", err)
+	}
+	if err := os.Rename(tmpPath, m.path); err != nil {
+		_ = os.Remove(tmpPath)
+		return fmt.Errorf("failed to atomically replace config: %w", err)
+	}
+
+	// 同步更新内存状态（fsnotify 也会在约 1 秒内触发热重载）
+	if err := m.viper.ReadInConfig(); err == nil {
+		if newCfg, err := decode(m.viper); err == nil {
+			m.current = newCfg
+			handlers := make([]func(*Config), len(m.onChange))
+			copy(handlers, m.onChange)
+			// 在持有锁之外调用回调，避免死锁
+			go func() {
+				for _, fn := range handlers {
+					fn(newCfg)
+				}
+			}()
+		}
+	}
+
+	slog.Info("ClaimOwner: user added to allowed_users", "bot", botName, "user_id", userID)
+	return nil
+}
+
 // setDefaults sets viper default values to prevent panics when config fields are missing.
 func setDefaults(v *viper.Viper) {
 	v.SetDefault("workspace", ".")
@@ -272,9 +363,7 @@ func validate(cfg *Config) error {
 		if b.Token == "" {
 			return fmt.Errorf("bots[%d] (%s) token must not be empty", i, b.Name)
 		}
-		if len(b.AllowedUsers) == 0 {
-			return fmt.Errorf("bots[%d] (%s) allowed_users must not be empty (prevents public access)", i, b.Name)
-		}
+		// allowed_users may be empty — bot enters "awaiting owner" mode where the first sender becomes owner
 	}
 	switch cfg.Security.Level {
 	case "locked", "strict", "moderate", "unrestricted":
