@@ -28,6 +28,7 @@ import (
 	"github.com/lustan3216/claudeclaw/internal/runner"
 	"github.com/lustan3216/claudeclaw/internal/scheduler"
 	"github.com/lustan3216/claudeclaw/internal/session"
+	"github.com/lustan3216/claudeclaw/internal/setup"
 )
 
 // version is injected at build time via ldflags into buildinfo.Version.
@@ -46,6 +47,7 @@ type cliFlags struct {
 	pidFile    string
 	claudePath string
 	debug      bool
+	forceSetup bool
 }
 
 func newRootCmd() *cobra.Command {
@@ -65,6 +67,7 @@ func newRootCmd() *cobra.Command {
 	root.PersistentFlags().StringVar(&flags.pidFile, "pid-file", "", "path to PID file (omit to disable)")
 	root.PersistentFlags().StringVar(&flags.claudePath, "claude", "claude", "path to claude binary")
 	root.PersistentFlags().BoolVar(&flags.debug, "debug", false, "enable debug logging")
+	root.PersistentFlags().BoolVar(&flags.forceSetup, "setup", false, "run interactive setup wizard")
 
 	// Subcommands
 	root.AddCommand(newVersionCmd())
@@ -76,6 +79,13 @@ func newRootCmd() *cobra.Command {
 // run is the daemon's main entry point: initializes all components, starts services, waits for signals.
 func run(flags *cliFlags) error {
 	daemon.SetupLogger(flags.debug)
+
+	// Run setup wizard on first launch (no config) or when --setup is passed.
+	if flags.forceSetup || setup.NeedsSetup(flags.configPath) {
+		if err := setup.Run(flags.configPath); err != nil {
+			return fmt.Errorf("setup failed: %w", err)
+		}
+	}
 
 	slog.Info("claudeclaw starting", "version", version, "config", flags.configPath)
 

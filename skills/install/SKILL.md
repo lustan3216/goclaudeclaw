@@ -3,76 +3,52 @@ name: claudeclaw:install
 description: Interactive setup wizard — download binary, configure bot, and start claudeclaw
 ---
 
-Guide the user through installing and configuring claudeclaw step by step.
+Guide the user through installing claudeclaw step by step.
 
 ## Step 1 — Download binary
 
-Run the install script to download the pre-built binary:
+Run the install script:
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/lustan3216/claudeclaw/main/install.sh | sh
 ```
 
-If the user has Go installed, they can alternatively use:
+Or with Go:
 ```sh
 go install github.com/lustan3216/claudeclaw/cmd/claudeclaw@latest
 ```
 
-Verify installation:
+Verify:
 ```sh
 claudeclaw --version
 ```
 
-## Step 2 — Create a Telegram bot
+## Step 2 — Run it
 
-Tell the user to:
-1. Open Telegram and message **@BotFather**
-2. Send `/newbot` and follow the prompts
-3. Copy the bot token (looks like `123456789:ABCdef...`)
-4. Get their Telegram user ID from **@userinfobot**
-
-## Step 3 — Create config.json
-
-Ask the user for:
-- **workspace** — the project directory Claude Code should work in (e.g. `/home/user/myproject`)
-- **bot token** — from BotFather
-- **allowed_users** — their Telegram user ID (from @userinfobot)
-
-Then create `config.json` in the workspace:
-
-```json
-{
-  "workspace": "<WORKSPACE_PATH>",
-  "bots": [
-    {
-      "name": "main",
-      "token": "<BOT_TOKEN>",
-      "allowed_users": [<USER_ID>],
-      "debounce_ms": 1500
-    }
-  ],
-  "security": {
-    "level": "moderate"
-  }
-}
-```
-
-## Step 4 — Start
-
-Option A — run directly:
 ```sh
 claudeclaw
 ```
 
-Option B — with watchdog (auto-restart + auto-update):
-```sh
-curl -fsSL https://raw.githubusercontent.com/lustan3216/claudeclaw/main/run.sh -o run.sh
-chmod +x run.sh
-bash run.sh
-```
+claudeclaw detects there is no config and launches the interactive setup wizard automatically.
+The wizard covers:
+1. **Telegram Bot Token** — from @BotFather (`/newbot`). Token is validated live.
+2. **Telegram User ID** — find yours with @userinfobot.
+3. **Workspace path** — the project directory (defaults to current dir).
+4. **Security level** — `moderate` is recommended for solo use.
+5. **Optional tokens** — GitHub, Notion, OpenAI (all skippable).
 
-## Step 5 — Test
+Config is saved to `config.json` and the daemon starts immediately.
 
-Send a message to the bot on Telegram. It should respond with 👀 while processing and reply when done.
+## Step 3 — Test
+
+Send a message to the bot on Telegram. It should react with 👀 while processing and reply when done.
 
 Send `/help` to see all available commands.
+
+## Re-run setup
+
+To change settings at any time:
+
+```sh
+claudeclaw --setup
+```

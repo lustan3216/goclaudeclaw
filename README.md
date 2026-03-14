@@ -44,35 +44,45 @@ claude plugin install lustan3216/claudeclaw
 
 ## Quick Start
 
-**1. Create `config.json`**
-
-```json
-{
-  "workspace": "/path/to/your/project",
-  "bots": [
-    {
-      "name": "main",
-      "token": "YOUR_TELEGRAM_BOT_TOKEN",
-      "allowed_users": [123456789],
-      "debounce_ms": 1500,
-      "openai_api_key": ""
-    }
-  ],
-  "security": {
-    "level": "moderate"
-  }
-}
-```
-
-Get your Telegram user ID from [@userinfobot](https://t.me/userinfobot).
-
-**2. Run it**
-
 ```bash
-claudeclaw --config config.json
+claudeclaw
 ```
 
-That's it — Claude Code is now reachable over Telegram from anywhere.
+No config file needed. On first launch, claudeclaw walks you through setup step by step:
+
+```
+⚡ Welcome to claudeclaw — let's get you set up.
+
+Step 1/5 — Telegram Bot Token
+  Don't have a bot? Message @BotFather on Telegram → /newbot
+
+  Bot token: xxxxxxx:xxxxxxxxx
+  Verifying token... ✓ Connected as @my_claude_bot
+
+Step 2/5 — Your Telegram User ID
+  To find your ID: message @userinfobot on Telegram.
+
+  Your user ID: 123456789
+
+Step 3/5 — Workspace path
+  Press Enter to use the current directory: /home/user/myproject
+
+  Workspace [.]:
+
+Step 4/5 — Security level
+  moderate     — most operations auto-approved (recommended)
+  ...
+
+Step 5/5 — Optional integrations
+  GitHub token:
+  Notion token: ghp_xxxx
+  OpenAI API key:
+
+✓ Config saved to config.json
+Starting claudeclaw with @my_claude_bot...
+```
+
+Config is saved to `config.json`. To re-run setup anytime: `claudeclaw --setup`
 
 ---
 
