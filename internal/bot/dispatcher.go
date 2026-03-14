@@ -428,6 +428,8 @@ func (d *Dispatcher) handleCommand(ctx context.Context, msg *telego.Message, top
 		_ = d.sessionMgr.Clear(d.workspace, d.botCfg.Name, chatID, topicID)
 		d.reply(chatID, topicID, fmt.Sprintf("✓ %s 已清除，session 已重置", args))
 	case "update":
+		// 保存通知信息，重启后发给触发 chat
+		d.saveRestartNotify(chatID, topicID)
 		d.reply(chatID, topicID, "⏳ 正在重启并拉取最新版本，稍候...")
 		go func() {
 			time.Sleep(500 * time.Millisecond)
@@ -1295,6 +1297,28 @@ func (d *Dispatcher) downloadTelegramFile(fileID string, chatID int64, filename 
 		"bot", d.botCfg.Name)
 
 	return destPath, nil
+}
+
+// restartNotifyPath 返回重启通知文件路径。
+func (d *Dispatcher) restartNotifyPath() string {
+	return filepath.Join(d.workspace, ".goclaudeclaw", "restart_notify.json")
+}
+
+// saveRestartNotify 在退出前保存通知目标，重启后发送 changelog。
+func (d *Dispatcher) saveRestartNotify(chatID int64, topicID int) {
+	type notifData struct {
+		ChatID    int64  `json:"chat_id"`
+		TopicID   int    `json:"topic_id"`
+		OldCommit string `json:"old_commit"`
+	}
+	out, _ := exec.Command("git", "-C", d.workspace, "rev-parse", "--short", "HEAD").Output()
+	data, _ := json.Marshal(notifData{
+		ChatID:    chatID,
+		TopicID:   topicID,
+		OldCommit: strings.TrimSpace(string(out)),
+	})
+	_ = os.MkdirAll(filepath.Join(d.workspace, ".goclaudeclaw"), 0o755)
+	_ = os.WriteFile(d.restartNotifyPath(), data, 0o644)
 }
 
 // combineMessages 将多条消息合并为一条，按时间顺序拼接。

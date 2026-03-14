@@ -4,12 +4,18 @@ package bot
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 	"log/slog"
+	"os"
+	"os/exec"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/mymmrac/telego"
 
+	"github.com/lustan3216/goclaudeclaw/internal/buildinfo"
 	"github.com/lustan3216/goclaudeclaw/internal/config"
 	"github.com/lustan3216/goclaudeclaw/internal/runner"
 	"github.com/lustan3216/goclaudeclaw/internal/session"
@@ -85,10 +91,49 @@ func (b *Bot) UpdateConfig(cfg *config.Config) {
 	}
 }
 
+// sendRestartNotification 检查是否有待发的重启通知，有则发送 changelog 并删除文件。
+func (b *Bot) sendRestartNotification() {
+	notifPath := b.dispatcher.restartNotifyPath()
+	data, err := os.ReadFile(notifPath)
+	if err != nil {
+		return
+	}
+	_ = os.Remove(notifPath)
+
+	var notif struct {
+		ChatID    int64  `json:"chat_id"`
+		TopicID   int    `json:"topic_id"`
+		OldCommit string `json:"old_commit"`
+	}
+	if err := json.Unmarshal(data, &notif); err != nil {
+		return
+	}
+
+	// 生成 changelog（新提交列表）
+	var changelogPart string
+	if notif.OldCommit != "" {
+		out, err := exec.Command("git", "-C", b.dispatcher.workspace,
+			"log", notif.OldCommit+"..HEAD", "--oneline").Output()
+		if err == nil && len(strings.TrimSpace(string(out))) > 0 {
+			changelogPart = "\n\n*更新內容*\n```\n" + strings.TrimSpace(string(out)) + "\n```"
+		}
+	}
+
+	msg := fmt.Sprintf("✅ 重啟完成，版本 `%s`%s", buildinfo.Version, changelogPart)
+	b.dispatcher.reply(notif.ChatID, notif.TopicID, msg)
+	slog.Info("重启通知已发送", "chat_id", notif.ChatID, "topic_id", notif.TopicID)
+}
+
 // Run 启动长轮询循环，阻塞直到 ctx 取消。
 // 应在独立 goroutine 中调用。
 func (b *Bot) Run(ctx context.Context) {
 	slog.Info("启动 bot 长轮询", "bot", b.cfg.Name)
+
+	// 检查是否有待发的重启通知（/update 触发重启后发送）
+	go func() {
+		time.Sleep(2 * time.Second) // 等 bot 完全就绪
+		b.sendRestartNotification()
+	}()
 
 	updates, err := b.api.UpdatesViaLongPolling(
 		// 显式指定 message_reaction（默认不包含，需明确声明）
