@@ -2,9 +2,6 @@
   "name": "goclaudeclaw",
   "version": "0.1.0",
   "description": "Claude Code on your phone — Telegram bot daemon with topics, multi-bot, auto subagent",
-  "bin": {
-    "goclaudeclaw": "./bin/goclaudeclaw-wrapper.sh"
-  },
   "scripts": {
     "postinstall": "sh install.sh"
   },
