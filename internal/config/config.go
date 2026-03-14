@@ -1,5 +1,5 @@
-// Package config 负责加载、验证和热重载 YAML 配置文件。
-// 使用 viper 实现，支持 fsnotify 监听文件变化，30 秒内自动生效。
+// Package config handles loading, validating, and hot-reloading of YAML config files.
+// Uses viper with fsnotify file watching; changes take effect automatically within 30 seconds.
 package config
 
 import (
@@ -11,19 +11,19 @@ import (
 	"github.com/spf13/viper"
 )
 
-// BotConfig 单个 Telegram Bot 的配置。
+// BotConfig holds configuration for a single Telegram Bot.
 type BotConfig struct {
 	Name                string  `mapstructure:"name"`
 	Token               string  `mapstructure:"token"`
 	AllowedUsers        []int64 `mapstructure:"allowed_users"`
 	DebounceMs          int     `mapstructure:"debounce_ms"`
-	OpenAIAPIKey        string  `mapstructure:"openai_api_key"`        // Whisper 语音转文字，留空则读 OPENAI_API_KEY 环境变量
-	MemoryUpdateInterval      int `mapstructure:"memory_update_interval"`      // 每 N 次成功完成后更新 memory.md，0 = 禁用
-	SessionSummarizeInterval  int `mapstructure:"session_summarize_interval"`  // 每 N 次成功完成后摘要对话并重置 session，0 = 禁用
-	MemoryCompressInterval    int `mapstructure:"memory_compress_interval"`    // 每 N 次 memory 更新后压缩 memory.md，0 = 禁用
+	OpenAIAPIKey        string  `mapstructure:"openai_api_key"`        // Whisper voice transcription; reads OPENAI_API_KEY env var if empty
+	MemoryUpdateInterval      int `mapstructure:"memory_update_interval"`      // update memory.md every N successful completions; 0 = disabled
+	SessionSummarizeInterval  int `mapstructure:"session_summarize_interval"`  // summarize conversation and reset session every N completions; 0 = disabled
+	MemoryCompressInterval    int `mapstructure:"memory_compress_interval"`    // compress memory.md every N memory updates; 0 = disabled
 }
 
-// MCPsConfig 预置 MCP 服务器配置，token 留空则不启用该服务器。
+// MCPsConfig holds preset MCP server configs; leaving token empty disables that server.
 type MCPsConfig struct {
 	GitHub  MCPGitHubConfig  `mapstructure:"github"`
 	Notion  MCPNotionConfig  `mapstructure:"notion"`
@@ -32,83 +32,83 @@ type MCPsConfig struct {
 	Gemini  MCPGeminiConfig  `mapstructure:"gemini"`
 }
 
-// MCPGitHubConfig GitHub MCP 服务器（@modelcontextprotocol/server-github）。
+// MCPGitHubConfig is the GitHub MCP server (@modelcontextprotocol/server-github).
 type MCPGitHubConfig struct {
-	Token string `mapstructure:"token"` // GitHub personal access token，留空则禁用
+	Token string `mapstructure:"token"` // GitHub personal access token; empty = disabled
 }
 
-// MCPNotionConfig Notion MCP 服务器（@notionhq/notion-mcp-server）。
+// MCPNotionConfig is the Notion MCP server (@notionhq/notion-mcp-server).
 type MCPNotionConfig struct {
-	Token string `mapstructure:"token"` // Notion integration token，留空则禁用
+	Token string `mapstructure:"token"` // Notion integration token; empty = disabled
 }
 
-// MCPBrowserConfig 浏览器自动化 MCP（@modelcontextprotocol/server-puppeteer）。
+// MCPBrowserConfig is the browser automation MCP (@modelcontextprotocol/server-puppeteer).
 type MCPBrowserConfig struct {
-	Enabled bool `mapstructure:"enabled"` // true 启用，无需 token
+	Enabled bool `mapstructure:"enabled"` // true = enabled, no token required
 }
 
-// MCPBraveConfig Brave 搜索 MCP（@modelcontextprotocol/server-brave-search）。
+// MCPBraveConfig is the Brave Search MCP (@modelcontextprotocol/server-brave-search).
 type MCPBraveConfig struct {
-	APIKey string `mapstructure:"api_key"` // Brave Search API key，留空则禁用
+	APIKey string `mapstructure:"api_key"` // Brave Search API key; empty = disabled
 }
 
-// MCPGeminiConfig Gemini MCP（gemini-mcp-tool），无需 token，依赖本机 Gemini CLI 认证。
+// MCPGeminiConfig is the Gemini MCP (gemini-mcp-tool); no token required, relies on local Gemini CLI auth.
 type MCPGeminiConfig struct {
-	Enabled bool `mapstructure:"enabled"` // true 启用，需本机已完成 gemini auth
+	Enabled bool `mapstructure:"enabled"` // true = enabled, requires local gemini auth to be completed
 }
 
-// QuietWindow 定义心跳静默时间段（本地时间）。
+// QuietWindow defines a heartbeat quiet period (local time).
 type QuietWindow struct {
 	Start string `mapstructure:"start"` // "23:00"
 	End   string `mapstructure:"end"`   // "08:00"
 }
 
-// HeartbeatConfig 心跳/定时提示配置。
+// HeartbeatConfig holds heartbeat/scheduled prompt configuration.
 type HeartbeatConfig struct {
 	Enabled         bool          `mapstructure:"enabled"`
 	IntervalMinutes int           `mapstructure:"interval_minutes"`
 	Prompt          string        `mapstructure:"prompt"`
 	QuietWindows    []QuietWindow `mapstructure:"quiet_windows"`
 	Timezone        string        `mapstructure:"timezone"`
-	ChatID          int64         `mapstructure:"chat_id"`   // 发送心跳结果的 Telegram chat ID（必填）
-	TopicID         int           `mapstructure:"topic_id"`  // 发送到论坛 topic（0 = 普通聊天）
+	ChatID          int64         `mapstructure:"chat_id"`   // Telegram chat ID to send heartbeat results to (required)
+	TopicID         int           `mapstructure:"topic_id"`  // send to forum topic (0 = regular chat)
 }
 
-// MemoryConfig claude-mem / mem0 集成配置。
+// MemoryConfig holds claude-mem / mem0 integration configuration.
 type MemoryConfig struct {
 	Provider string `mapstructure:"provider"` // "claude-mem" | "mem0"
 	Endpoint string `mapstructure:"endpoint"`
 }
 
-// SecurityConfig claude 执行权限级别。
+// SecurityConfig holds claude execution permission level.
 type SecurityConfig struct {
-	// Level 可选值: locked | strict | moderate | unrestricted
-	// - locked:        仅允许只读操作
-	// - strict:        需要用户确认每个工具调用
-	// - moderate:      允许大多数操作，危险操作需确认（默认）
-	// - unrestricted:  跳过所有权限检查（--dangerously-skip-permissions）
+	// Level options: locked | strict | moderate | unrestricted
+	// - locked:        allow read-only operations only
+	// - strict:        require user confirmation for every tool call
+	// - moderate:      allow most operations, confirm dangerous ones (default)
+	// - unrestricted:  skip all permission checks (--dangerously-skip-permissions)
 	Level string `mapstructure:"level"`
 }
 
-// WebConfig 内置 HTTP 管理接口配置。
+// WebConfig holds built-in HTTP admin interface configuration.
 type WebConfig struct {
 	Enabled bool   `mapstructure:"enabled"`
 	Host    string `mapstructure:"host"`
 	Port    int    `mapstructure:"port"`
 }
 
-// CronJob 单条 cron 任务配置（markdown frontmatter 格式）。
+// CronJob holds configuration for a single cron job (markdown frontmatter format).
 type CronJob struct {
 	Name     string `mapstructure:"name"`
-	Schedule string `mapstructure:"schedule"` // cron 表达式，如 "0 9 * * *"
+	Schedule string `mapstructure:"schedule"` // cron expression, e.g. "0 9 * * *"
 	Prompt   string `mapstructure:"prompt"`
-	Workspace string `mapstructure:"workspace"` // 留空则使用全局 workspace
+	Workspace string `mapstructure:"workspace"` // empty = use global workspace
 }
 
-// Config 全局配置结构体。
+// Config is the global configuration struct.
 type Config struct {
 	Workspace  string          `mapstructure:"workspace"`
-	AutoUpdate bool            `mapstructure:"auto_update"` // true 表示 run.sh watchdog 每次重啟前自動 git pull + rebuild
+	AutoUpdate bool            `mapstructure:"auto_update"` // true = run.sh watchdog auto git pull + rebuild before each restart
 	Bots       []BotConfig     `mapstructure:"bots"`
 	Memory     MemoryConfig    `mapstructure:"memory"`
 	Heartbeat  HeartbeatConfig `mapstructure:"heartbeat"`
@@ -118,26 +118,26 @@ type Config struct {
 	MCPs       MCPsConfig      `mapstructure:"mcps"`
 }
 
-// Manager 持有当前配置并支持热重载。
-// 所有读取操作通过 Get() 方法，保证并发安全。
+// Manager holds the current config and supports hot-reloading.
+// All reads go through the Get() method for concurrency safety.
 type Manager struct {
 	mu      sync.RWMutex
 	current *Config
 	viper   *viper.Viper
 
-	// onChange 在配置成功重载后触发，允许上层组件响应变更。
+	// onChange is called after a successful config reload, allowing upper-layer components to react to changes.
 	onChange []func(newCfg *Config)
 }
 
-// New 从指定路径加载配置文件，并启动 fsnotify 热重载监听。
-// configPath 可以是绝对路径或相对路径，支持 .yaml / .toml 格式。
+// New loads the config file from the specified path and starts fsnotify hot-reload watching.
+// configPath can be absolute or relative; supports .yaml / .toml formats.
 func New(configPath string) (*Manager, error) {
 	v := viper.New()
 	v.SetConfigFile(configPath)
 	setDefaults(v)
 
 	if err := v.ReadInConfig(); err != nil {
-		return nil, fmt.Errorf("读取配置文件失败: %w", err)
+		return nil, fmt.Errorf("failed to read config file: %w", err)
 	}
 
 	cfg, err := decode(v)
@@ -150,12 +150,12 @@ func New(configPath string) (*Manager, error) {
 		viper:   v,
 	}
 
-	// 启动热重载：viper 通过 fsnotify 监听文件变化
+	// Start hot-reload: viper watches for file changes via fsnotify
 	v.OnConfigChange(func(e fsnotify.Event) {
-		slog.Info("配置文件变更，重新加载", "file", e.Name, "op", e.Op.String())
+		slog.Info("config file changed, reloading", "file", e.Name, "op", e.Op.String())
 		newCfg, err := decode(v)
 		if err != nil {
-			slog.Error("配置重载失败，保留旧配置", "err", err)
+			slog.Error("config reload failed, keeping old config", "err", err)
 			return
 		}
 		m.mu.Lock()
@@ -167,31 +167,31 @@ func New(configPath string) (*Manager, error) {
 		for _, fn := range handlers {
 			fn(newCfg)
 		}
-		slog.Info("配置重载成功")
+		slog.Info("config reloaded successfully")
 	})
 	v.WatchConfig()
 
 	return m, nil
 }
 
-// Get 返回当前配置的只读副本，并发安全。
+// Get returns a read-only copy of the current config; concurrency-safe.
 func (m *Manager) Get() *Config {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	// 返回浅拷贝，防止调用方意外修改
+	// Return a shallow copy to prevent callers from accidentally modifying the internal state
 	c := *m.current
 	return &c
 }
 
-// OnChange 注册配置变更回调，热重载时调用。
+// OnChange registers a config-change callback, called on hot-reload.
 func (m *Manager) OnChange(fn func(newCfg *Config)) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.onChange = append(m.onChange, fn)
 }
 
-// keyAliases 将用户友好的短名称映射到 viper 配置路径。
-// 供 Telegram /set /unset /config 命令使用。
+// keyAliases maps user-friendly short names to viper config paths.
+// Used by Telegram /set /unset /config commands.
 var keyAliases = map[string]string{
 	"github_token": "mcps.github.token",
 	"notion_token": "mcps.notion.token",
@@ -201,7 +201,7 @@ var keyAliases = map[string]string{
 	"auto_update":  "auto_update",
 }
 
-// Set 通过 viper 路径或用户友好别名设置配置值，写入文件并触发热重载回调。
+// Set sets a config value by viper path or user-friendly alias, writes to file, and triggers hot-reload callbacks.
 func (m *Manager) Set(keyOrAlias, value string) error {
 	viperKey := keyOrAlias
 	if mapped, ok := keyAliases[keyOrAlias]; ok {
@@ -209,11 +209,11 @@ func (m *Manager) Set(keyOrAlias, value string) error {
 	}
 	m.viper.Set(viperKey, value)
 	if err := m.viper.WriteConfig(); err != nil {
-		return fmt.Errorf("写入配置文件失败: %w", err)
+		return fmt.Errorf("failed to write config file: %w", err)
 	}
 	newCfg, err := decode(m.viper)
 	if err != nil {
-		return fmt.Errorf("配置解析失败: %w", err)
+		return fmt.Errorf("config parse failed: %w", err)
 	}
 	m.mu.Lock()
 	m.current = newCfg
@@ -226,7 +226,7 @@ func (m *Manager) Set(keyOrAlias, value string) error {
 	return nil
 }
 
-// KnownAliases 返回所有支持的用户友好别名列表（副本，防止调用方意外修改内部映射）。
+// KnownAliases returns a copy of all supported user-friendly aliases (copy prevents accidental modification of the internal map).
 func KnownAliases() map[string]string {
 	out := make(map[string]string, len(keyAliases))
 	for k, v := range keyAliases {
@@ -235,7 +235,7 @@ func KnownAliases() map[string]string {
 	return out
 }
 
-// setDefaults 设置 viper 默认值，避免配置文件缺字段时 panic。
+// setDefaults sets viper default values to prevent panics when config fields are missing.
 func setDefaults(v *viper.Viper) {
 	v.SetDefault("workspace", ".")
 	v.SetDefault("auto_update", true)
@@ -251,35 +251,35 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("memory.endpoint", "http://localhost:8080")
 }
 
-// decode 将 viper 当前状态解码为 Config 结构体，并做基本校验。
+// decode decodes the current viper state into a Config struct and performs basic validation.
 func decode(v *viper.Viper) (*Config, error) {
 	var cfg Config
 	if err := v.Unmarshal(&cfg); err != nil {
-		return nil, fmt.Errorf("配置解析失败: %w", err)
+		return nil, fmt.Errorf("config parse failed: %w", err)
 	}
 	if err := validate(&cfg); err != nil {
-		return nil, fmt.Errorf("配置校验失败: %w", err)
+		return nil, fmt.Errorf("config validation failed: %w", err)
 	}
 	return &cfg, nil
 }
 
-// validate 对关键字段做合法性检查。
+// validate performs validity checks on key fields.
 func validate(cfg *Config) error {
 	if len(cfg.Bots) == 0 {
-		return fmt.Errorf("至少需要配置一个 bot")
+		return fmt.Errorf("at least one bot must be configured")
 	}
 	for i, b := range cfg.Bots {
 		if b.Token == "" {
-			return fmt.Errorf("bots[%d] (%s) token 不能为空", i, b.Name)
+			return fmt.Errorf("bots[%d] (%s) token must not be empty", i, b.Name)
 		}
 		if len(b.AllowedUsers) == 0 {
-			return fmt.Errorf("bots[%d] (%s) allowed_users 不能为空（防止公开访问）", i, b.Name)
+			return fmt.Errorf("bots[%d] (%s) allowed_users must not be empty (prevents public access)", i, b.Name)
 		}
 	}
 	switch cfg.Security.Level {
 	case "locked", "strict", "moderate", "unrestricted":
 	default:
-		return fmt.Errorf("security.level 无效值: %q，可选: locked | strict | moderate | unrestricted", cfg.Security.Level)
+		return fmt.Errorf("invalid security.level: %q, valid options: locked | strict | moderate | unrestricted", cfg.Security.Level)
 	}
 	return nil
 }

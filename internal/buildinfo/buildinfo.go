@@ -1,6 +1,6 @@
-// Package buildinfo 存储构建时注入的版本信息。
-// main 包通过 ldflags 设置 Version，其他包直接读取。
+// Package buildinfo stores version information injected at build time.
+// The main package sets Version via ldflags; other packages read it directly.
 package buildinfo
 
-// Version 在构建时通过 -ldflags "-X github.com/lustan3216/claudeclaw/internal/buildinfo.Version=x.y.z" 注入。
+// Version is injected at build time via -ldflags "-X github.com/lustan3216/claudeclaw/internal/buildinfo.Version=x.y.z".
 var Version = "dev"

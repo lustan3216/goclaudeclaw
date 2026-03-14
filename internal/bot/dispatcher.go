@@ -1,6 +1,6 @@
-// Package bot 实现 Telegram 消息路由、防抖和前台/后台任务分发。
-// 支持 Telegram 论坛话题（Forum Topics）：每个 topic 拥有独立的 Claude 会话，
-// topicID=0 表示普通聊天（非话题消息）。
+// Package bot implements Telegram message routing, debouncing, and foreground/background task dispatch.
+// Supports Telegram Forum Topics: each topic has its own Claude session;
+// topicID=0 means a regular chat (non-topic message).
 package bot
 
 import (
@@ -28,59 +28,59 @@ import (
 	"github.com/lustan3216/claudeclaw/internal/session"
 )
 
-// incomingMsg 是防抖窗口内收集的原始消息。
+// incomingMsg is a raw message collected within a debounce window.
 type incomingMsg struct {
 	text       string
 	from       string
 	chatID     int64
-	topicID    int // 0 = 普通聊天，>0 = 论坛话题 ID
-	messageID  int // 用于回复指定消息
+	topicID    int // 0 = regular chat, >0 = forum topic ID
+	messageID  int // used to reply to a specific message
 	receivedAt time.Time
 }
 
-// chatTopicKey 唯一标识一个 chat+topic 的防抖/会话键。
+// chatTopicKey uniquely identifies a chat+topic for debouncing/session keying.
 type chatTopicKey struct {
 	chatID  int64
 	topicID int
 }
 
-// cancelEntry 记录可通过 reaction 取消的任务信息。
+// cancelEntry holds cancellation info for a task that can be cancelled via reaction.
 type cancelEntry struct {
 	cancel  context.CancelFunc
 	topicID int
 }
 
-// cancelEmojis 用户可通过对消息打以下 reaction 取消正在处理的任务。
+// cancelEmojis — users can cancel an in-progress task by reacting with one of these emojis.
 var cancelEmojis = map[string]bool{"😱": true, "😭": true}
 
-// httpClient 用于 Whisper API 调用，60s 超时。
+// httpClient for Whisper API calls, 60s timeout.
 var httpClient = &http.Client{Timeout: 60 * time.Second}
 
-// downloadClient 用于 Telegram 文件下载，120s 超时。
+// downloadClient for Telegram file downloads, 120s timeout.
 var downloadClient = &http.Client{Timeout: 120 * time.Second}
 
-// debounceState 跟踪每个 chat+topic 的防抖状态。
+// debounceState tracks the debounce state for each chat+topic.
 type debounceState struct {
 	timer    *time.Timer
 	messages []incomingMsg
 	mu       sync.Mutex
 }
 
-// Dispatcher 负责消息路由和防抖聚合。
-// 每个 bot 实例共享同一个 Dispatcher，通过 chatID+topicID 区分会话。
+// Dispatcher handles message routing and debounce aggregation.
+// Each bot instance shares one Dispatcher, distinguished by chatID+topicID.
 type Dispatcher struct {
 	mu       sync.Mutex
-	debounce map[chatTopicKey]*debounceState // chat+topic → 防抖状态
+	debounce map[chatTopicKey]*debounceState // chat+topic → debounce state
 
 	countsMu         sync.Mutex
-	completionCounts map[chatTopicKey]int // chat+topic → 成功完成次数（用于触发记忆更新/摘要）
-	memUpdateCount   int                  // 全局 memory 更新次数（用于触发 memory.md 压缩）
+	completionCounts map[chatTopicKey]int // chat+topic → successful completion count (triggers memory update/summarize)
+	memUpdateCount   int                  // global memory update count (triggers memory.md compression)
 
 	autoUpdateMu      sync.Mutex
-	autoUpdateRunning bool // 防止同时启动多个后台更新
+	autoUpdateRunning bool // prevents multiple concurrent background updates
 
 	cancelMu       sync.Mutex
-	cancelReactions map[int]cancelEntry // 触发消息 ID → 取消信息（用于 reaction 取消）
+	cancelReactions map[int]cancelEntry // trigger message ID → cancel info (for reaction cancellation)
 
 	runnerMgr  *runner.Manager
 	sessionMgr *session.Manager
@@ -92,7 +92,7 @@ type Dispatcher struct {
 	workspace  string
 }
 
-// NewDispatcher 创建消息分发器。
+// NewDispatcher creates a message dispatcher.
 func NewDispatcher(
 	botAPI *telego.Bot,
 	botCfg config.BotConfig,
@@ -117,7 +117,7 @@ func NewDispatcher(
 	}
 }
 
-// UpdateConfig 热重载时更新配置（调用方应在配置变更回调中调用）。
+// UpdateConfig updates config on hot-reload (caller should invoke this in the config-change callback).
 func (d *Dispatcher) UpdateConfig(cfg *config.Config, botCfg config.BotConfig) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
@@ -125,9 +125,9 @@ func (d *Dispatcher) UpdateConfig(cfg *config.Config, botCfg config.BotConfig) {
 	d.botCfg = botCfg
 }
 
-// Handle 接收来自 Telegram 的单条消息，进入防抖队列。
+// Handle receives a single message from Telegram and enters it into the debounce queue.
 func (d *Dispatcher) Handle(ctx context.Context, update telego.Update) {
-	// 处理 reaction 取消：用户对消息打 😱 或 😭 取消正在进行的任务
+	// Handle reaction cancellation: user reacts with 😱 or 😭 to cancel an in-progress task
 	if update.MessageReaction != nil {
 		d.handleReactionCancel(update.MessageReaction)
 		return
@@ -138,10 +138,10 @@ func (d *Dispatcher) Handle(ctx context.Context, update telego.Update) {
 	}
 	msg := update.Message
 
-	// 鉴权：只处理 allowed_users 中的用户
+	// Auth: only process users in allowed_users
 	if msg.From == nil || !d.isAllowed(msg.From.ID) {
 		if msg.From != nil {
-			slog.Warn("拒绝未授权用户",
+			slog.Warn("rejected unauthorized user",
 				"user_id", msg.From.ID,
 				"username", msg.From.Username,
 				"bot", d.botCfg.Name)
@@ -149,61 +149,61 @@ func (d *Dispatcher) Handle(ctx context.Context, update telego.Update) {
 		return
 	}
 
-	// 提取 topic ID：论坛话题消息时使用 MessageThreadID，否则为 0
+	// Extract topic ID: use MessageThreadID for forum topic messages, else 0
 	topicID := 0
 	if msg.IsTopicMessage {
 		topicID = msg.MessageThreadID
 	}
 
-	// auto_update=true 时，每次收到消息都在后台检查并拉取最新版本
+	// When auto_update=true, check and pull the latest version in the background on each message
 	if d.cfgMgr != nil && d.cfgMgr.Get().AutoUpdate {
 		go d.triggerAutoUpdate()
 	}
 
-	// 处理论坛话题生命周期事件（服务消息，无文本内容）
+	// Handle forum topic lifecycle events (service messages with no text content)
 	if msg.ForumTopicCreated != nil {
 		topicName := msg.ForumTopicCreated.Name
 		threadID := msg.MessageThreadID
-		slog.Info("新 topic 已建立",
+		slog.Info("new topic created",
 			"topic_name", topicName,
 			"thread_id", threadID,
 			"chat_id", msg.Chat.ID)
-		// session 懒创建，首条真实消息到来时自动建立
-		d.reply(msg.Chat.ID, threadID, "✓ 已就緒 — 這個 topic 有獨立的對話 session")
+		// Session is lazy-created when the first real message arrives
+		d.reply(msg.Chat.ID, threadID, "✓ Ready — this topic has its own conversation session")
 		return
 	}
 
 	if msg.ForumTopicClosed != nil {
-		slog.Info("topic 已关闭",
+		slog.Info("topic closed",
 			"thread_id", msg.MessageThreadID,
 			"chat_id", msg.Chat.ID)
-		// session 保留在存储中，无需其他操作
+		// Session is kept in storage, no other action needed
 		return
 	}
 
 	if msg.ForumTopicReopened != nil {
-		slog.Info("topic 已重新开启",
+		slog.Info("topic reopened",
 			"thread_id", msg.MessageThreadID,
 			"chat_id", msg.Chat.ID)
-		d.reply(msg.Chat.ID, msg.MessageThreadID, "✓ Topic 已重新開啟，繼續原有 session")
+		d.reply(msg.Chat.ID, msg.MessageThreadID, "✓ Topic reopened, continuing original session")
 		return
 	}
 
-	// 处理内置命令（telego 没有 IsCommand/Command 方法，手动检测）
+	// Handle built-in commands (telego has no IsCommand/Command helper, parse manually)
 	if cmd, args, ok := parseCommand(msg); ok {
 		d.handleCommand(ctx, msg, topicID, cmd, args)
 		return
 	}
 
-	// 处理语音消息：下载 ogg 文件后调用 Whisper API 转文字
+	// Handle voice messages: download ogg file then call Whisper API for transcription
 	if msg.Voice != nil {
 		voiceText, err := d.transcribeVoice(msg.Voice.FileID, msg.Chat.ID)
 		if err != nil {
-			slog.Error("语音转文字失败", "err", err, "chat_id", msg.Chat.ID)
-			d.reply(msg.Chat.ID, topicID, fmt.Sprintf("❌ 语音转文字失败: %v", err))
+			slog.Error("voice transcription failed", "err", err, "chat_id", msg.Chat.ID)
+			d.reply(msg.Chat.ID, topicID, fmt.Sprintf("❌ Voice transcription failed: %v", err))
 			return
 		}
-		text := "[语音转文字]: " + voiceText
+		text := "[Voice transcription]: " + voiceText
 		d.enqueueWithDebounce(ctx, chatTopicKey{msg.Chat.ID, topicID}, incomingMsg{
 			text:       text,
 			from:       msg.From.Username,
@@ -215,31 +215,31 @@ func (d *Dispatcher) Handle(ctx context.Context, update telego.Update) {
 		return
 	}
 
-	// 处理图片消息：取最高分辨率的 PhotoSize，base64 编码嵌入 prompt 供 Claude Vision 使用
+	// Handle photo messages: take the highest-resolution PhotoSize, base64-encode and embed in prompt for Claude Vision
 	if len(msg.Photo) > 0 {
-		photo := msg.Photo[len(msg.Photo)-1] // 最后一项分辨率最高
+		photo := msg.Photo[len(msg.Photo)-1] // last item has the highest resolution
 		savedPath, err := d.downloadTelegramFile(photo.FileID, msg.Chat.ID, "photo.jpg")
 		if err != nil {
-			slog.Error("下载图片失败", "err", err, "chat_id", msg.Chat.ID)
-			d.reply(msg.Chat.ID, topicID, fmt.Sprintf("❌ 图片下载失败: %v", err))
+			slog.Error("failed to download photo", "err", err, "chat_id", msg.Chat.ID)
+			d.reply(msg.Chat.ID, topicID, fmt.Sprintf("❌ Photo download failed: %v", err))
 			return
 		}
 		caption := strings.TrimSpace(msg.Caption)
 
-		// 尝试读取并 base64 编码图片；超过 5MB 则退回文件路径模式
+		// Try to read and base64-encode the image; fall back to file path mode if over 5MB
 		const maxImageBytes = 5 * 1024 * 1024
 		var text string
 		if imgBytes, readErr := os.ReadFile(savedPath); readErr == nil && len(imgBytes) <= maxImageBytes {
 			b64 := base64.StdEncoding.EncodeToString(imgBytes)
-			text = fmt.Sprintf("[图片]\n<image>\n<media_type>image/jpeg</media_type>\n<data>%s</data>\n</image>", b64)
+			text = fmt.Sprintf("[Image]\n<image>\n<media_type>image/jpeg</media_type>\n<data>%s</data>\n</image>", b64)
 		} else {
-			// 文件过大或读取失败，退回路径模式
+			// File too large or read failed, fall back to path mode
 			if readErr != nil {
-				slog.Warn("读取图片文件失败，退回路径模式", "err", readErr, "path", savedPath)
+				slog.Warn("failed to read image file, falling back to path mode", "err", readErr, "path", savedPath)
 			} else {
-				slog.Warn("图片超过 5MB，退回路径模式", "size", len(imgBytes), "path", savedPath)
+				slog.Warn("image exceeds 5MB, falling back to path mode", "size", len(imgBytes), "path", savedPath)
 			}
-			text = fmt.Sprintf("[用户发送了图片: %s]", savedPath)
+			text = fmt.Sprintf("[User sent an image: %s]", savedPath)
 		}
 		if caption != "" {
 			text += "\n" + caption
@@ -255,17 +255,17 @@ func (d *Dispatcher) Handle(ctx context.Context, update telego.Update) {
 		return
 	}
 
-	// 处理文件消息（PDF、文档等通用文件）
+	// Handle document messages (PDFs, generic files, etc.)
 	if msg.Document != nil {
 		doc := msg.Document
 		filename := doc.FileName
 		if filename == "" {
-			filename = doc.FileUniqueID // 无原始文件名时用 unique ID 代替
+			filename = doc.FileUniqueID // use unique ID when no original filename
 		}
 		savedPath, err := d.downloadTelegramFile(doc.FileID, msg.Chat.ID, filename)
 		if err != nil {
-			slog.Error("下载文件失败", "err", err, "chat_id", msg.Chat.ID, "filename", filename)
-			d.reply(msg.Chat.ID, topicID, fmt.Sprintf("❌ 文件下载失败: %v", err))
+			slog.Error("failed to download file", "err", err, "chat_id", msg.Chat.ID, "filename", filename)
+			d.reply(msg.Chat.ID, topicID, fmt.Sprintf("❌ File download failed: %v", err))
 			return
 		}
 		caption := strings.TrimSpace(msg.Caption)
@@ -275,9 +275,9 @@ func (d *Dispatcher) Handle(ctx context.Context, update telego.Update) {
 		}
 		var text string
 		if mimeType == "application/pdf" {
-			text = fmt.Sprintf("[用户发送了PDF文件，请使用Read工具查看内容: %s]", savedPath)
+			text = fmt.Sprintf("[User sent a PDF file, please use the Read tool to view its contents: %s]", savedPath)
 		} else {
-			text = fmt.Sprintf("[用户发送了文件: %s (%s)]", savedPath, mimeType)
+			text = fmt.Sprintf("[User sent a file: %s (%s)]", savedPath, mimeType)
 		}
 		if caption != "" {
 			text += "\n" + caption
@@ -308,22 +308,22 @@ func (d *Dispatcher) Handle(ctx context.Context, update telego.Update) {
 	})
 }
 
-// parseCommand 检测消息是否为 bot 命令。
-// 返回命令名称（不含斜杠）、参数字符串，以及是否为命令的布尔值。
-// telego 不提供 IsCommand/Command 辅助方法，需手动解析 Entities。
+// parseCommand detects whether a message is a bot command.
+// Returns the command name (without slash), argument string, and whether it is a command.
+// telego provides no IsCommand/Command helper methods; parsing is done manually via Entities.
 func parseCommand(msg *telego.Message) (cmd string, args string, ok bool) {
 	if !strings.HasPrefix(msg.Text, "/") {
 		return "", "", false
 	}
-	// 确认第一个 entity 类型为 bot_command
+	// Confirm the first entity type is bot_command
 	for _, e := range msg.Entities {
 		if e.Type == telego.EntityTypeBotCommand && e.Offset == 0 {
-			// 截取命令部分，例如 "/clear@botname" → "clear"
-			cmdFull := msg.Text[1:e.Length] // 去掉前缀 "/"
+			// Extract the command part, e.g. "/clear@botname" → "clear"
+			cmdFull := msg.Text[1:e.Length] // strip leading "/"
 			if at := strings.IndexByte(cmdFull, '@'); at >= 0 {
 				cmdFull = cmdFull[:at]
 			}
-			// 参数为命令后的剩余文本（去除首尾空白）
+			// Arguments are the remaining text after the command (trimmed)
 			rest := strings.TrimSpace(msg.Text[e.Length:])
 			return cmdFull, rest, true
 		}
@@ -331,37 +331,37 @@ func parseCommand(msg *telego.Message) (cmd string, args string, ok bool) {
 	return "", "", false
 }
 
-// handleCommand 处理 /start /help /clear /status /bg /set /unset /config 等内置命令。
+// handleCommand handles built-in commands: /start /help /clear /status /bg /set /unset /config.
 func (d *Dispatcher) handleCommand(ctx context.Context, msg *telego.Message, topicID int, cmd string, args string) {
 	chatID := msg.Chat.ID
 	switch cmd {
 	case "start", "help":
 		d.reply(chatID, topicID, fmt.Sprintf(
 			"⚡ *goclaudeclaw* `%s`\n\n"+
-				"*💬 對話*\n"+
-				"直接发消息即可与 Claude 对话\n"+
-				"`/clear`          清除 session，重载 MCP\n"+
-				"`/bg <任务>`      强制后台模式，长任务不堵对话\n"+
-				"`/status`         查看运行状态\n"+
-				"`/usage`          今日 token 用量统计\n"+
-				"😱 或 😭           对正在处理的消息打此 reaction 可取消任务\n\n"+
-				"*🔄 更新*\n"+
-				"`/update`                      立即重启并拉取最新版本\n"+
-				"`/set auto_update false`  关闭每次消息时的后台自动检查更新\n\n"+
-				"*⚙️ MCP 配置*\n"+
-				"`/config`                    查看所有设置（token 脱敏）\n"+
-				"`/set <key> <value>`  更新配置，立即生效并重置 session\n"+
-				"`/unset <key>`          清除配置值\n\n"+
-				"*🔑 可設置的 Key*\n"+
+				"*💬 Chat*\n"+
+				"Send any message to talk to Claude\n"+
+				"`/clear`          Clear session and reload MCP\n"+
+				"`/bg <task>`      Force background mode for long tasks\n"+
+				"`/status`         Show runtime status\n"+
+				"`/usage`          Today's token usage stats\n"+
+				"😱 or 😭           React to a message being processed to cancel the task\n\n"+
+				"*🔄 Updates*\n"+
+				"`/update`                      Restart and pull latest version\n"+
+				"`/set auto_update false`  Disable background auto-update check on each message\n\n"+
+				"*⚙️ MCP Config*\n"+
+				"`/config`                    View all settings (tokens masked)\n"+
+				"`/set <key> <value>`  Update config, takes effect immediately and resets session\n"+
+				"`/unset <key>`          Clear a config value\n\n"+
+				"*🔑 Settable Keys*\n"+
 				"```\n"+
 				"github_token   GitHub Personal Access Token\n"+
 				"notion_token   Notion Integration Token\n"+
 				"brave_key      Brave Search API Key\n"+
-				"browser        浏览器 MCP       true/false\n"+
-				"gemini         Gemini MCP        true/false\n"+
-				"auto_update    自动更新          true/false\n"+
+				"browser        Browser MCP        true/false\n"+
+				"gemini         Gemini MCP         true/false\n"+
+				"auto_update    Auto-update        true/false\n"+
 				"```\n\n"+
-				"*📝 示例*\n"+
+				"*📝 Examples*\n"+
 				"```\n"+
 				"/set notion_token secret_xxx\n"+
 				"/set gemini true\n"+
@@ -372,13 +372,13 @@ func (d *Dispatcher) handleCommand(ctx context.Context, msg *telego.Message, top
 		))
 	case "config":
 		if d.cfgMgr == nil {
-			d.reply(chatID, topicID, "❌ 配置管理器未初始化")
+			d.reply(chatID, topicID, "❌ Config manager not initialized")
 			return
 		}
 		cfg := d.cfgMgr.Get()
 		mask := func(s string) string {
 			if s == "" {
-				return "（未设置）"
+				return "(not set)"
 			}
 			if len(s) <= 8 {
 				return "***"
@@ -390,7 +390,7 @@ func (d *Dispatcher) handleCommand(ctx context.Context, msg *telego.Message, top
 			browserStatus = "true"
 		}
 		d.reply(chatID, topicID, fmt.Sprintf(
-			"当前 MCP 设置:\n"+
+			"Current MCP settings:\n"+
 				"  github_token = %s\n"+
 				"  notion_token = %s\n"+
 				"  brave_key    = %s\n"+
@@ -402,54 +402,54 @@ func (d *Dispatcher) handleCommand(ctx context.Context, msg *telego.Message, top
 		))
 	case "set":
 		if d.cfgMgr == nil {
-			d.reply(chatID, topicID, "❌ 配置管理器未初始化")
+			d.reply(chatID, topicID, "❌ Config manager not initialized")
 			return
 		}
 		parts := strings.SplitN(args, " ", 2)
 		if len(parts) < 2 || parts[0] == "" || parts[1] == "" {
-			d.reply(chatID, topicID, "用法: /set <key> <value>\n\n可设置: github_token, notion_token, brave_key, browser, gemini, auto_update")
+			d.reply(chatID, topicID, "Usage: /set <key> <value>\n\nSettable: github_token, notion_token, brave_key, browser, gemini, auto_update")
 			return
 		}
 		key, value := parts[0], parts[1]
 		if err := d.cfgMgr.Set(key, value); err != nil {
-			d.reply(chatID, topicID, fmt.Sprintf("❌ 设置失败: %v", err))
+			d.reply(chatID, topicID, fmt.Sprintf("❌ Set failed: %v", err))
 			return
 		}
-		// 清除 session，让下一条消息重建（重载 MCP）
+		// Clear session so the next message rebuilds it (reloads MCP)
 		_ = d.sessionMgr.Clear(d.workspace, d.botCfg.Name, chatID, topicID)
-		d.reply(chatID, topicID, fmt.Sprintf("✓ %s 已更新，session 已重置（下次对话将重载 MCP）", key))
+		d.reply(chatID, topicID, fmt.Sprintf("✓ %s updated, session reset (MCP will reload on next message)", key))
 	case "unset":
 		if d.cfgMgr == nil {
-			d.reply(chatID, topicID, "❌ 配置管理器未初始化")
+			d.reply(chatID, topicID, "❌ Config manager not initialized")
 			return
 		}
 		if args == "" {
-			d.reply(chatID, topicID, "用法: /unset <key>\n\n可设置: github_token, notion_token, brave_key, browser, gemini, auto_update")
+			d.reply(chatID, topicID, "Usage: /unset <key>\n\nSettable: github_token, notion_token, brave_key, browser, gemini, auto_update")
 			return
 		}
 		if err := d.cfgMgr.Set(args, ""); err != nil {
-			d.reply(chatID, topicID, fmt.Sprintf("❌ 清除失败: %v", err))
+			d.reply(chatID, topicID, fmt.Sprintf("❌ Clear failed: %v", err))
 			return
 		}
 		_ = d.sessionMgr.Clear(d.workspace, d.botCfg.Name, chatID, topicID)
-		d.reply(chatID, topicID, fmt.Sprintf("✓ %s 已清除，session 已重置", args))
+		d.reply(chatID, topicID, fmt.Sprintf("✓ %s cleared, session reset", args))
 	case "update":
-		// 保存通知信息，重启后发给触发 chat
+		// Save notification info; send to the triggering chat after restart
 		d.saveRestartNotify(chatID, topicID)
-		d.reply(chatID, topicID, "⏳ 正在重启并拉取最新版本，稍候...")
+		d.reply(chatID, topicID, "⏳ Restarting and pulling latest version, please wait...")
 		go func() {
 			time.Sleep(500 * time.Millisecond)
-			os.Exit(0) // watchdog (run.sh) 会自动 git pull + rebuild + 重启
+			os.Exit(0) // watchdog (run.sh) will auto git pull + rebuild + restart
 		}()
 	case "clear":
 		if err := d.sessionMgr.Clear(d.workspace, d.botCfg.Name, chatID, topicID); err != nil {
-			slog.Error("清除会话失败", "err", err, "chat_id", chatID, "topic_id", topicID)
-			d.reply(chatID, topicID, fmt.Sprintf("❌ 清除会话失败: %v", err))
+			slog.Error("failed to clear session", "err", err, "chat_id", chatID, "topic_id", topicID)
+			d.reply(chatID, topicID, fmt.Sprintf("❌ Failed to clear session: %v", err))
 			return
 		}
-		d.reply(chatID, topicID, "✓ 会话已清除，下次对话将开启新会话。")
+		d.reply(chatID, topicID, "✓ Session cleared, next message will start a new session.")
 	case "status":
-		topicInfo := "无（普通聊天）"
+		topicInfo := "none (regular chat)"
 		if topicID > 0 {
 			topicInfo = fmt.Sprintf("Topic #%d", topicID)
 		}
@@ -458,22 +458,22 @@ func (d *Dispatcher) handleCommand(ctx context.Context, msg *telego.Message, top
 			d.botCfg.Name, d.workspace, d.cfg.Security.Level, topicInfo,
 		))
 	case "bg":
-		// 强制后台模式
+		// Force background mode
 		if args == "" {
-			d.reply(chatID, topicID, "用法: /bg <任务描述>")
+			d.reply(chatID, topicID, "Usage: /bg <task description>")
 			return
 		}
 		d.dispatchJob(ctx, chatID, topicID, msg.MessageID, args, runner.ModeBackground)
 	case "usage":
 		d.reply(chatID, topicID, d.buildUsageReport())
 	default:
-		d.reply(chatID, topicID, "未知命令，发送 /help 查看帮助。")
+		d.reply(chatID, topicID, "Unknown command, send /help to see available commands.")
 	}
 }
 
-// buildUsageReport 统计 ~/.claude/projects/ 下今日 token 用量。
-// triggerAutoUpdate 检查 GitHub 是否有新提交，有则后台 git pull + rebuild → goclaudeclaw.new。
-// 使用 autoUpdateRunning 标志防止并发。
+// buildUsageReport calculates today's token usage from ~/.claude/projects/.
+// triggerAutoUpdate checks GitHub for new commits and, if found, git pulls + rebuilds → goclaudeclaw.new in the background.
+// Uses autoUpdateRunning flag to prevent concurrency.
 func (d *Dispatcher) triggerAutoUpdate() {
 	d.autoUpdateMu.Lock()
 	if d.autoUpdateRunning {
@@ -489,7 +489,7 @@ func (d *Dispatcher) triggerAutoUpdate() {
 		d.autoUpdateMu.Unlock()
 	}()
 
-	// 检查远程是否有新提交（不拉取，只 fetch 单个 commit）
+	// Check if remote has new commits (no pull, just fetch one commit)
 	fetchCmd := exec.Command("git", "-C", d.workspace, "fetch", "origin", "main", "--depth=1")
 	fetchCmd.Env = os.Environ()
 	if err := fetchCmd.Run(); err != nil {
@@ -510,16 +510,16 @@ func (d *Dispatcher) triggerAutoUpdate() {
 	local := strings.TrimSpace(string(localOut))
 	remote := strings.TrimSpace(string(remoteOut))
 	if local == remote {
-		return // 已是最新，不需要更新
+		return // already up to date
 	}
 
-	// 有新版本，拉取并编译
-	slog.Info("auto_update: 检测到新版本，后台编译中", "local", local[:8], "remote", remote[:8])
+	// New version available, pull and build
+	slog.Info("auto_update: new version detected, building in background", "local", local[:8], "remote", remote[:8])
 
 	pullCmd := exec.Command("git", "-C", d.workspace, "pull", "origin", "main")
 	pullCmd.Env = os.Environ()
 	if err := pullCmd.Run(); err != nil {
-		slog.Warn("auto_update: git pull 失败", "err", err)
+		slog.Warn("auto_update: git pull failed", "err", err)
 		return
 	}
 
@@ -539,26 +539,26 @@ func (d *Dispatcher) triggerAutoUpdate() {
 	buildCmd.Dir = d.workspace
 	buildCmd.Env = os.Environ()
 	if err := buildCmd.Run(); err != nil {
-		slog.Warn("auto_update: 编译失败", "err", err)
+		slog.Warn("auto_update: build failed", "err", err)
 		_ = os.Remove(filepath.Join(d.workspace, "goclaudeclaw.new"))
 		return
 	}
-	slog.Info("auto_update: 新版本已就绪，下次重启生效", "version", version)
+	slog.Info("auto_update: new version ready, will take effect on next restart", "version", version)
 }
 
 func (d *Dispatcher) buildUsageReport() string {
 	homeDir, err := os.UserHomeDir()
 	if err != nil {
-		return "❌ 无法读取用量数据"
+		return "❌ Unable to read usage data"
 	}
 
-	// 将 workspace 路径转换为 Claude 的 project key（路径中 / 替换为 -）
+	// Convert workspace path to Claude's project key (replace / with -)
 	projectKey := strings.ReplaceAll(d.workspace, "/", "-")
 	projectDir := filepath.Join(homeDir, ".claude", "projects", projectKey)
 
 	entries, err := os.ReadDir(projectDir)
 	if err != nil {
-		return "❌ 找不到 session 记录（" + projectDir + "）"
+		return "❌ Session records not found (" + projectDir + ")"
 	}
 
 	type usageStats struct {
@@ -643,24 +643,24 @@ func (d *Dispatcher) buildUsageReport() string {
 	}
 
 	return fmt.Sprintf(
-		"📊 *Token 用量统计*\n\n"+
-			"*今日 (%s)*\n"+
+		"📊 *Token Usage*\n\n"+
+			"*Today (%s)*\n"+
 			"```\n"+
-			"输入        %s\n"+
-			"输出        %s\n"+
-			"缓存写入    %s\n"+
-			"缓存命中    %s\n"+
-			"消息数      %d  (%d sessions)\n"+
+			"Input       %s\n"+
+			"Output      %s\n"+
+			"Cache write %s\n"+
+			"Cache hit   %s\n"+
+			"Messages    %d  (%d sessions)\n"+
 			"```\n\n"+
-			"*全部记录*\n"+
+			"*All time*\n"+
 			"```\n"+
-			"输入        %s\n"+
-			"输出        %s\n"+
-			"缓存写入    %s\n"+
-			"缓存命中    %s\n"+
-			"消息数      %d  (%d sessions)\n"+
+			"Input       %s\n"+
+			"Output      %s\n"+
+			"Cache write %s\n"+
+			"Cache hit   %s\n"+
+			"Messages    %d  (%d sessions)\n"+
 			"```\n\n"+
-			"额度余额请查看: console.anthropic.com",
+			"Check your credit balance at: console.anthropic.com",
 		today,
 		fmtK(todayStats.inputTokens), fmtK(todayStats.outputTokens),
 		fmtK(todayStats.cacheCreate), fmtK(todayStats.cacheRead),
@@ -671,12 +671,12 @@ func (d *Dispatcher) buildUsageReport() string {
 	)
 }
 
-// enqueueWithDebounce 将消息加入防抖窗口。
-// 在 debounce_ms 内连续到达的同一 chat+topic 消息会被合并为一条发给 claude。
+// enqueueWithDebounce adds a message to the debounce window.
+// Messages arriving within debounce_ms for the same chat+topic are merged into one and sent to claude.
 func (d *Dispatcher) enqueueWithDebounce(ctx context.Context, key chatTopicKey, msg incomingMsg) {
 	debounceMs := d.botCfg.DebounceMs
 	if debounceMs <= 0 {
-		debounceMs = 1500 // 默认 1.5s
+		debounceMs = 1500 // default 1.5s
 	}
 	delay := time.Duration(debounceMs) * time.Millisecond
 
@@ -693,7 +693,7 @@ func (d *Dispatcher) enqueueWithDebounce(ctx context.Context, key chatTopicKey, 
 
 	state.messages = append(state.messages, msg)
 
-	// 重置计时器：新消息到来时重新计时
+	// Reset the timer: restart countdown when a new message arrives
 	if state.timer != nil {
 		state.timer.Stop()
 	}
@@ -708,17 +708,17 @@ func (d *Dispatcher) enqueueWithDebounce(ctx context.Context, key chatTopicKey, 
 		}
 
 		combined := combineMessages(msgs)
-		slog.Info("防抖窗口触发",
+		slog.Info("debounce window fired",
 			"chat_id", key.chatID,
 			"topic_id", key.topicID,
 			"message_count", len(msgs),
 			"combined_len", len(combined),
 			"bot", d.botCfg.Name)
 
-		// 取最后一条消息的 ID 作为回复目标
+		// Use the last message's ID as the reply target
 		lastMsgID := msgs[len(msgs)-1].messageID
 
-		// 异步分类和分发，不阻塞防抖 goroutine
+		// Classify and dispatch asynchronously, without blocking the debounce goroutine
 		go func() {
 			mode := d.classifier.Classify(ctx, combined)
 			d.dispatchJob(ctx, key.chatID, key.topicID, lastMsgID, combined, mode)
@@ -726,13 +726,13 @@ func (d *Dispatcher) enqueueWithDebounce(ctx context.Context, key chatTopicKey, 
 	})
 }
 
-// dispatchJob 将任务提交到 runner，并处理 Telegram 回复。
-// replyToID 为触发本次任务的最后一条消息 ID，回复时 quote 该消息。
+// dispatchJob submits a job to the runner and handles Telegram replies.
+// replyToID is the ID of the last message that triggered this job; it is quoted in the reply.
 func (d *Dispatcher) dispatchJob(ctx context.Context, chatID int64, topicID int, replyToID int, prompt string, mode runner.TaskMode) {
-	// 收到訊息先打 👀
+	// React with 👀 on receipt
 	d.react(chatID, replyToID, "👀")
 
-	// 创建独立 cancel，注册到 cancelReactions 支持 reaction 取消（😱/😭）
+	// Create an independent cancel and register it in cancelReactions for reaction cancellation (😱/😭)
 	jobCtx, jobCancel := context.WithCancel(ctx)
 	d.cancelMu.Lock()
 	d.cancelReactions[replyToID] = cancelEntry{cancel: jobCancel, topicID: topicID}
@@ -744,9 +744,9 @@ func (d *Dispatcher) dispatchJob(ctx context.Context, chatID int64, topicID int,
 		jobCancel()
 	}
 
-	// 后台任务：立即回复用户，异步执行
+	// Background job: reply immediately to user, execute asynchronously
 	if mode == runner.ModeBackground {
-		d.replyTo(chatID, topicID, replyToID, "⏳ 已在后台处理，完成后通知你。")
+		d.replyTo(chatID, topicID, replyToID, "⏳ Processing in the background, will notify you when done.")
 
 		resultCh := make(chan runner.Result, 1)
 		d.runnerMgr.Submit(runner.Job{
@@ -765,9 +765,9 @@ func (d *Dispatcher) dispatchJob(ctx context.Context, chatID int64, topicID int,
 			result := <-resultCh
 			if result.Err != nil {
 				if jobCtx.Err() != nil {
-					return // 已由 reaction 取消，reply 由 handleReactionCancel 发送
+					return // already cancelled via reaction; reply sent by handleReactionCancel
 				}
-				d.replyTo(chatID, topicID, replyToID, fmt.Sprintf("❌ 后台任务失败: %v", result.Err))
+				d.replyTo(chatID, topicID, replyToID, fmt.Sprintf("❌ Background job failed: %v", result.Err))
 				return
 			}
 			d.react(chatID, replyToID, "✅")
@@ -778,8 +778,8 @@ func (d *Dispatcher) dispatchJob(ctx context.Context, chatID int64, topicID int,
 		return
 	}
 
-	// 前台任务：持续发送 typing 动作直到完成，再回复结果
-	// 立即发送第一次 typing，让用户马上看到反馈
+	// Foreground job: keep sending typing action until complete, then reply with result
+	// Send the first typing immediately so the user sees feedback right away
 	firstTypingParams := &telego.SendChatActionParams{
 		ChatID: telego.ChatID{ID: chatID},
 		Action: telego.ChatActionTyping,
@@ -788,7 +788,7 @@ func (d *Dispatcher) dispatchJob(ctx context.Context, chatID int64, topicID int,
 		firstTypingParams.MessageThreadID = topicID
 	}
 	if err := d.botAPI.SendChatAction(firstTypingParams); err != nil {
-		slog.Warn("SendChatAction 失败", "err", err, "chat_id", chatID, "topic_id", topicID)
+		slog.Warn("SendChatAction failed", "err", err, "chat_id", chatID, "topic_id", topicID)
 	}
 
 	resultCh := make(chan runner.Result, 1)
@@ -803,7 +803,7 @@ func (d *Dispatcher) dispatchJob(ctx context.Context, chatID int64, topicID int,
 		ResultCh:  resultCh,
 	})
 
-	// 每 4s 续一次 typing，直到结果就绪
+	// Renew typing every 4s until the result is ready
 	typingDone := make(chan struct{})
 	go func() {
 		ticker := time.NewTicker(4 * time.Second)
@@ -823,7 +823,7 @@ func (d *Dispatcher) dispatchJob(ctx context.Context, chatID int64, topicID int,
 					params.MessageThreadID = topicID
 				}
 				if err := d.botAPI.SendChatAction(params); err != nil {
-					slog.Warn("续 typing 失败", "err", err, "chat_id", chatID, "topic_id", topicID)
+					slog.Warn("failed to renew typing", "err", err, "chat_id", chatID, "topic_id", topicID)
 				}
 			}
 		}
@@ -834,10 +834,10 @@ func (d *Dispatcher) dispatchJob(ctx context.Context, chatID int64, topicID int,
 	cleanup()
 
 	if jobCtx.Err() != nil {
-		return // 已由 reaction 取消，reply 由 handleReactionCancel 发送
+		return // already cancelled via reaction; reply sent by handleReactionCancel
 	}
 	if result.Err != nil {
-		d.replyTo(chatID, topicID, replyToID, fmt.Sprintf("❌ 执行失败: %v", result.Err))
+		d.replyTo(chatID, topicID, replyToID, fmt.Sprintf("❌ Execution failed: %v", result.Err))
 		return
 	}
 	d.react(chatID, replyToID, "✅")
@@ -846,8 +846,8 @@ func (d *Dispatcher) dispatchJob(ctx context.Context, chatID int64, topicID int,
 	d.maybeSummarizeSession(ctx, chatID, topicID)
 }
 
-// maybeUpdateMemory 在每 N 次成功完成后静默触发 memory.md 更新。
-// 不向用户发送任何消息，结果只写日志。
+// maybeUpdateMemory silently triggers a memory.md update every N successful completions.
+// Sends no message to the user; results are only logged.
 func (d *Dispatcher) maybeUpdateMemory(ctx context.Context, chatID int64, topicID int) {
 	interval := d.botCfg.MemoryUpdateInterval
 	if interval <= 0 {
@@ -864,18 +864,18 @@ func (d *Dispatcher) maybeUpdateMemory(ctx context.Context, chatID int64, topicI
 		return
 	}
 
-	slog.Info("触发记忆更新", "chat_id", chatID, "topic_id", topicID, "count", count)
+	slog.Info("triggering memory update", "chat_id", chatID, "topic_id", topicID, "count", count)
 
-	prompt := "請根據以上對話，靜默更新工作目錄下的 .claudeclaw/memory.md 文件。\n" +
-		"文件格式使用 section 標記，每個 section 包含雙語（中英文）tags，方便相關性匹配：\n\n" +
+	prompt := "Based on the conversation above, silently update the .claudeclaw/memory.md file in the working directory.\n" +
+		"Use section markers in the file format, with each section containing bilingual (Chinese and English) tags for relevance matching:\n\n" +
 		"<!-- section: global tags: always -->\n" +
-		"## 全局偏好\n" +
-		"（用戶偏好、語言設定等，每次都注入）\n\n" +
-		"<!-- section: project-name tags: 英文tag,中文tag,別名,... -->\n" +
-		"## 項目名稱\n" +
-		"（項目相關知識）\n\n" +
-		"Tags 規則：同一概念的中英文都要寫，例如 'hn,永旺,lottery,彩票'。\n" +
-		"保持每個 section 簡潔，不超過 300 字。不需要回覆任何其他內容。"
+		"## Global Preferences\n" +
+		"(User preferences, language settings, etc. — injected every time)\n\n" +
+		"<!-- section: project-name tags: english-tag,chinese-tag,alias,... -->\n" +
+		"## Project Name\n" +
+		"(Project-related knowledge)\n\n" +
+		"Tag rules: include both English and Chinese for the same concept, e.g. 'hn,lottery'.\n" +
+		"Keep each section concise, under 300 words. Do not reply with any other content."
 
 	resultCh := make(chan runner.Result, 1)
 	d.runnerMgr.Submit(runner.Job{
@@ -889,19 +889,19 @@ func (d *Dispatcher) maybeUpdateMemory(ctx context.Context, chatID int64, topicI
 		ResultCh:  resultCh,
 	})
 
-	// 丢弃结果，只记录日志；成功后检查是否需要压缩 memory.md
+	// Discard result, log only; on success check if memory.md needs compression
 	go func() {
 		result := <-resultCh
 		if result.Err != nil {
-			slog.Warn("记忆更新失败", "err", result.Err, "chat_id", chatID, "topic_id", topicID)
+			slog.Warn("memory update failed", "err", result.Err, "chat_id", chatID, "topic_id", topicID)
 			return
 		}
-		slog.Info("记忆更新完成", "chat_id", chatID, "topic_id", topicID)
+		slog.Info("memory update complete", "chat_id", chatID, "topic_id", topicID)
 		d.maybeCompressMemory(ctx, chatID, topicID)
 	}()
 }
 
-// maybeCompressMemory 在每 N 次 memory 更新后静默压缩 memory.md，去重并精简。
+// maybeCompressMemory silently compresses memory.md every N memory updates, deduplicating and trimming it.
 func (d *Dispatcher) maybeCompressMemory(ctx context.Context, chatID int64, topicID int) {
 	interval := d.botCfg.MemoryCompressInterval
 	if interval <= 0 {
@@ -917,11 +917,11 @@ func (d *Dispatcher) maybeCompressMemory(ctx context.Context, chatID int64, topi
 		return
 	}
 
-	slog.Info("触发 memory.md 压缩", "count", count)
+	slog.Info("triggering memory.md compression", "count", count)
 
-	prompt := "請閱讀工作目錄下的 .claudeclaw/memory.md，" +
-		"去除重複內容、合并相似條目、刪除過時資訊，重新整理成簡潔的 Markdown。" +
-		"直接覆寫原文件，不需要回覆任何其他內容。"
+	prompt := "Please read .claudeclaw/memory.md in the working directory, " +
+		"remove duplicate content, merge similar entries, delete outdated information, and rewrite it as concise Markdown. " +
+		"Overwrite the original file directly. Do not reply with any other content."
 
 	resultCh := make(chan runner.Result, 1)
 	d.runnerMgr.Submit(runner.Job{
@@ -938,15 +938,15 @@ func (d *Dispatcher) maybeCompressMemory(ctx context.Context, chatID int64, topi
 	go func() {
 		result := <-resultCh
 		if result.Err != nil {
-			slog.Warn("memory.md 压缩失败", "err", result.Err)
+			slog.Warn("memory.md compression failed", "err", result.Err)
 		} else {
-			slog.Info("memory.md 压缩完成")
+			slog.Info("memory.md compression complete")
 		}
 	}()
 }
 
-// maybeSummarizeSession 在每 N 次成功完成后，摘要对话内容写入 memory.md 并重置 session。
-// 下次对话从全新 session 开始，但摘要会通过 memory.md 注入保持上下文连续性。
+// maybeSummarizeSession summarizes the conversation into memory.md and resets the session every N completions.
+// The next conversation starts from a fresh session, but continuity is maintained via memory.md injection.
 func (d *Dispatcher) maybeSummarizeSession(ctx context.Context, chatID int64, topicID int) {
 	interval := d.botCfg.SessionSummarizeInterval
 	if interval <= 0 {
@@ -962,11 +962,11 @@ func (d *Dispatcher) maybeSummarizeSession(ctx context.Context, chatID int64, to
 		return
 	}
 
-	slog.Info("触发对话摘要并重置 session", "chat_id", chatID, "topic_id", topicID, "count", count)
+	slog.Info("triggering conversation summarize and session reset", "chat_id", chatID, "topic_id", topicID, "count", count)
 
-	prompt := "請將以上完整對話整理成摘要，" +
-		"更新工作目錄下的 .claudeclaw/memory.md 文件的 '## 對話摘要' 部分，" +
-		"保留重要決策、用戶偏好和關鍵上下文。完成後不需要回覆任何其他內容。"
+	prompt := "Please summarize the full conversation above " +
+		"and update the '## Conversation Summary' section of .claudeclaw/memory.md in the working directory, " +
+		"preserving important decisions, user preferences, and key context. Do not reply with any other content after completing this."
 
 	resultCh := make(chan runner.Result, 1)
 	d.runnerMgr.Submit(runner.Job{
@@ -983,22 +983,22 @@ func (d *Dispatcher) maybeSummarizeSession(ctx context.Context, chatID int64, to
 	go func() {
 		result := <-resultCh
 		if result.Err != nil {
-			slog.Warn("对话摘要失败，保留原 session", "err", result.Err, "chat_id", chatID, "topic_id", topicID)
+			slog.Warn("conversation summarize failed, keeping original session", "err", result.Err, "chat_id", chatID, "topic_id", topicID)
 			return
 		}
-		// 摘要成功后清除 session，下次对话重新开始（memory.md 已有摘要）
+		// After successful summarize, clear session so next conversation starts fresh (memory.md has the summary)
 		if err := d.sessionMgr.Clear(d.workspace, d.botCfg.Name, chatID, topicID); err != nil {
-			slog.Warn("清除 session 失败", "err", err)
+			slog.Warn("failed to clear session", "err", err)
 		} else {
-			slog.Info("对话已摘要，session 已重置", "chat_id", chatID, "topic_id", topicID)
+			slog.Info("conversation summarized, session reset", "chat_id", chatID, "topic_id", topicID)
 		}
 	}()
 }
 
-// sendOutputTo 处理超长输出，首段 quote 触发消息，后续段直接发送。
+// sendOutputTo handles long output: the first chunk quotes the trigger message; subsequent chunks are sent directly.
 func (d *Dispatcher) sendOutputTo(chatID int64, topicID int, replyToID int, output string) {
 	if output == "" {
-		d.replyTo(chatID, topicID, replyToID, "✓ 完成（无输出）")
+		d.replyTo(chatID, topicID, replyToID, "✓ Done (no output)")
 		return
 	}
 
@@ -1023,7 +1023,7 @@ func (d *Dispatcher) sendOutputTo(chatID int64, topicID int, replyToID int, outp
 	}
 }
 
-// replyTo 回复指定消息（quote），若 replyToID <= 0 则退化为普通发送。
+// replyTo replies to a specific message (quote); falls back to a plain send if replyToID <= 0.
 func (d *Dispatcher) replyTo(chatID int64, topicID int, replyToID int, text string) {
 	params := &telego.SendMessageParams{
 		ChatID:    telego.ChatID{ID: chatID},
@@ -1037,21 +1037,21 @@ func (d *Dispatcher) replyTo(chatID int64, topicID int, replyToID int, text stri
 		params.ReplyParameters = &telego.ReplyParameters{MessageID: replyToID}
 	}
 	if _, err := d.botAPI.SendMessage(params); err != nil {
-		// Markdown 解析失败时降级为纯文本重试
+		// Markdown parse failure: fall back to plain text and retry
 		params.ParseMode = ""
 		if _, err2 := d.botAPI.SendMessage(params); err2 != nil {
-			slog.Error("发送 Telegram 消息失败",
+			slog.Error("failed to send Telegram message",
 				"chat_id", chatID, "topic_id", topicID, "err", err2, "bot", d.botCfg.Name)
 		}
 	}
 }
 
-// reply 向指定 chat（可选 topic）发送文本消息，不 quote 任何消息。
+// reply sends a text message to the specified chat (optionally a topic) without quoting any message.
 func (d *Dispatcher) reply(chatID int64, topicID int, text string) {
 	d.replyTo(chatID, topicID, 0, text)
 }
 
-// handleReactionCancel 检查用户新增的 reaction：若为取消 emoji（😱/😭），则取消对应任务。
+// handleReactionCancel checks newly added user reactions: if it is a cancel emoji (😱/😭), cancels the corresponding task.
 func (d *Dispatcher) handleReactionCancel(r *telego.MessageReactionUpdated) {
 	for _, reaction := range r.NewReaction {
 		emoji, ok := reaction.(*telego.ReactionTypeEmoji)
@@ -1067,19 +1067,19 @@ func (d *Dispatcher) handleReactionCancel(r *telego.MessageReactionUpdated) {
 
 		if found {
 			entry.cancel()
-			// 移除 👀，换成 🛑 表示已取消
+			// Remove 👀, replace with 🛑 to indicate cancellation
 			_ = d.botAPI.SetMessageReaction(&telego.SetMessageReactionParams{
 				ChatID:    telego.ChatID{ID: r.Chat.ID},
 				MessageID: r.MessageID,
 				Reaction:  []telego.ReactionType{},
 			})
-			d.reply(r.Chat.ID, entry.topicID, "🛑 已取消")
+			d.reply(r.Chat.ID, entry.topicID, "🛑 Cancelled")
 		}
 		return
 	}
 }
 
-// react 给指定消息打表情 reaction，出错只记日志不影响主流程。
+// react adds an emoji reaction to a message; errors are only logged and don't affect the main flow.
 func (d *Dispatcher) react(chatID int64, messageID int, emoji string) {
 	_ = d.botAPI.SetMessageReaction(&telego.SetMessageReactionParams{
 		ChatID:    telego.ChatID{ID: chatID},
@@ -1088,7 +1088,7 @@ func (d *Dispatcher) react(chatID int64, messageID int, emoji string) {
 	})
 }
 
-// isAllowed 检查用户是否在白名单中。
+// isAllowed checks whether a user is in the whitelist.
 func (d *Dispatcher) isAllowed(userID int64) bool {
 	d.mu.Lock()
 	allowed := d.botCfg.AllowedUsers
@@ -1102,7 +1102,7 @@ func (d *Dispatcher) isAllowed(userID int64) bool {
 	return false
 }
 
-// openAIAPIKey 返回有效的 OpenAI API 密钥：优先使用 BotConfig 字段，其次读环境变量。
+// openAIAPIKey returns a valid OpenAI API key: prefers BotConfig field, then falls back to env var.
 func (d *Dispatcher) openAIAPIKey() string {
 	if k := d.botCfg.OpenAIAPIKey; k != "" {
 		return k
@@ -1110,78 +1110,78 @@ func (d *Dispatcher) openAIAPIKey() string {
 	return os.Getenv("OPENAI_API_KEY")
 }
 
-// transcribeVoice 下载 Telegram 语音文件（ogg）并通过 Whisper API 转为文字。
+// transcribeVoice downloads a Telegram voice file (ogg) and transcribes it to text via the Whisper API.
 func (d *Dispatcher) transcribeVoice(fileID string, chatID int64) (string, error) {
 	apiKey := d.openAIAPIKey()
 	if apiKey == "" {
-		return "", fmt.Errorf("未配置 OpenAI API key（openai_api_key 或 OPENAI_API_KEY）")
+		return "", fmt.Errorf("OpenAI API key not configured (openai_api_key or OPENAI_API_KEY)")
 	}
 
-	// 下载 ogg 文件到 inbox
+	// Download ogg file to inbox
 	savedPath, err := d.downloadTelegramFile(fileID, chatID, "voice.ogg")
 	if err != nil {
-		return "", fmt.Errorf("下载语音文件失败: %w", err)
+		return "", fmt.Errorf("failed to download voice file: %w", err)
 	}
 
-	// 读取文件内容
+	// Read file contents
 	audioBytes, err := os.ReadFile(savedPath)
 	if err != nil {
-		return "", fmt.Errorf("读取语音文件失败: %w", err)
+		return "", fmt.Errorf("failed to read voice file: %w", err)
 	}
 
-	// 构造 multipart 请求体
+	// Build multipart request body
 	var buf bytes.Buffer
 	mw := multipart.NewWriter(&buf)
 
-	// model 字段
+	// model field
 	if err := mw.WriteField("model", "whisper-1"); err != nil {
-		return "", fmt.Errorf("写入 multipart model 字段失败: %w", err)
+		return "", fmt.Errorf("failed to write multipart model field: %w", err)
 	}
 
-	// file 字段
+	// file field
 	fw, err := mw.CreateFormFile("file", "voice.ogg")
 	if err != nil {
-		return "", fmt.Errorf("创建 multipart file 字段失败: %w", err)
+		return "", fmt.Errorf("failed to create multipart file field: %w", err)
 	}
 	if _, err := fw.Write(audioBytes); err != nil {
-		return "", fmt.Errorf("写入音频数据失败: %w", err)
+		return "", fmt.Errorf("failed to write audio data: %w", err)
 	}
 	if err := mw.Close(); err != nil {
-		return "", fmt.Errorf("关闭 multipart writer 失败: %w", err)
+		return "", fmt.Errorf("failed to close multipart writer: %w", err)
 	}
 
-	// 发送请求到 Whisper API
+	// Send request to Whisper API
 	req, err := http.NewRequest(http.MethodPost, "https://api.openai.com/v1/audio/transcriptions", &buf)
 	if err != nil {
-		return "", fmt.Errorf("创建 HTTP 请求失败: %w", err)
+		return "", fmt.Errorf("failed to create HTTP request: %w", err)
 	}
 	req.Header.Set("Authorization", "Bearer "+apiKey)
 	req.Header.Set("Content-Type", mw.FormDataContentType())
 
 	resp, err := httpClient.Do(req)
 	if err != nil {
-		return "", fmt.Errorf("调用 Whisper API 失败: %w", err)
+		return "", fmt.Errorf("Whisper API call failed: %w", err)
 	}
 	defer resp.Body.Close()
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return "", fmt.Errorf("读取 Whisper 响应失败: %w", err)
+		return "", fmt.Errorf("failed to read Whisper response: %w", err)
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("Whisper API 返回错误 %d: %s", resp.StatusCode, string(body))
+		return "", fmt.Errorf("Whisper API returned error %d: %s", resp.StatusCode, string(body))
 	}
 
-	// 解析响应：{"text": "..."}
+	// Parse response: {"text": "..."}
 	var result struct {
 		Text string `json:"text"`
 	}
 	if err := json.Unmarshal(body, &result); err != nil {
-		return "", fmt.Errorf("解析 Whisper 响应失败: %w", err)
+		return "", fmt.Errorf("failed to parse Whisper response: %w", err)
 	}
 
-	slog.Info("语音转文字完成",
+	slog.Info("voice transcription complete",
 		"chat_id", chatID,
 		"chars", len(result.Text),
 		"bot", d.botCfg.Name)
@@ -1189,59 +1189,59 @@ func (d *Dispatcher) transcribeVoice(fileID string, chatID int64) (string, error
 	return result.Text, nil
 }
 
-// downloadTelegramFile 通过 Telegram Bot API 下载文件，
-// 保存到 {workspace}/.claudeclaw/inbox/{chatID}/{filename}，
-// 返回本地绝对路径。
+// downloadTelegramFile downloads a file via the Telegram Bot API,
+// saves it to {workspace}/.claudeclaw/inbox/{chatID}/{filename},
+// and returns the local absolute path.
 func (d *Dispatcher) downloadTelegramFile(fileID string, chatID int64, filename string) (string, error) {
-	// 第一步：向 Telegram 查询文件路径
+	// Step 1: query Telegram for the file path
 	file, err := d.botAPI.GetFile(&telego.GetFileParams{FileID: fileID})
 	if err != nil {
-		return "", fmt.Errorf("获取文件信息失败: %w", err)
+		return "", fmt.Errorf("failed to get file info: %w", err)
 	}
 	if file.FilePath == "" {
-		return "", fmt.Errorf("Telegram 返回空文件路径")
+		return "", fmt.Errorf("Telegram returned empty file path")
 	}
 
-	// 构造下载 URL
+	// Build download URL
 	downloadURL := fmt.Sprintf("https://api.telegram.org/file/bot%s/%s", d.botCfg.Token, file.FilePath)
 
-	// 第二步：创建目录 {workspace}/.claudeclaw/inbox/{chatID}/
+	// Step 2: create directory {workspace}/.claudeclaw/inbox/{chatID}/
 	inboxDir := filepath.Join(d.workspace, ".claudeclaw", "inbox", fmt.Sprintf("%d", chatID))
 	if err := os.MkdirAll(inboxDir, 0o755); err != nil {
-		return "", fmt.Errorf("创建 inbox 目录失败: %w", err)
+		return "", fmt.Errorf("failed to create inbox directory: %w", err)
 	}
 
-	// 目标路径：若文件名已存在则加时间戳前缀避免覆盖
+	// Target path: add timestamp prefix if file already exists to avoid overwriting
 	destPath := filepath.Join(inboxDir, filename)
 	if _, statErr := os.Stat(destPath); statErr == nil {
-		// 文件已存在，加时间戳前缀
+		// File already exists, add timestamp prefix
 		ts := time.Now().Format("20060102_150405_")
 		destPath = filepath.Join(inboxDir, ts+filename)
 	}
 
-	// 第三步：HTTP 下载文件内容
+	// Step 3: HTTP download
 	resp, err := downloadClient.Get(downloadURL)
 	if err != nil {
-		return "", fmt.Errorf("HTTP 下载失败: %w", err)
+		return "", fmt.Errorf("HTTP download failed: %w", err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("Telegram 返回非 200 状态: %d", resp.StatusCode)
+		return "", fmt.Errorf("Telegram returned non-200 status: %d", resp.StatusCode)
 	}
 
-	// 写入本地文件
+	// Write to local file
 	f, err := os.Create(destPath)
 	if err != nil {
-		return "", fmt.Errorf("创建本地文件失败: %w", err)
+		return "", fmt.Errorf("failed to create local file: %w", err)
 	}
 	defer f.Close()
 
 	if _, err := io.Copy(f, resp.Body); err != nil {
-		return "", fmt.Errorf("写入文件失败: %w", err)
+		return "", fmt.Errorf("failed to write file: %w", err)
 	}
 
-	slog.Info("文件已下载",
+	slog.Info("file downloaded",
 		"chat_id", chatID,
 		"filename", filename,
 		"dest", destPath,
@@ -1250,12 +1250,12 @@ func (d *Dispatcher) downloadTelegramFile(fileID string, chatID int64, filename 
 	return destPath, nil
 }
 
-// restartNotifyPath 返回重启通知文件路径。
+// restartNotifyPath returns the path to the restart notification file.
 func (d *Dispatcher) restartNotifyPath() string {
 	return filepath.Join(d.workspace, ".claudeclaw", "restart_notify.json")
 }
 
-// saveRestartNotify 在退出前保存通知目标，重启后发送 changelog。
+// saveRestartNotify saves the notification target before exiting so that the changelog can be sent after restart.
 func (d *Dispatcher) saveRestartNotify(chatID int64, topicID int) {
 	type notifData struct {
 		ChatID    int64  `json:"chat_id"`
@@ -1272,8 +1272,8 @@ func (d *Dispatcher) saveRestartNotify(chatID int64, topicID int) {
 	_ = os.WriteFile(d.restartNotifyPath(), data, 0o644)
 }
 
-// combineMessages 将多条消息合并为一条，按时间顺序拼接。
-// 多条消息之间用换行分隔，便于 claude 理解上下文。
+// combineMessages merges multiple messages into one, joined in chronological order.
+// Multiple messages are separated by newlines so claude understands the context.
 func combineMessages(msgs []incomingMsg) string {
 	if len(msgs) == 1 {
 		return msgs[0].text

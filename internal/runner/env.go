@@ -5,8 +5,8 @@ import (
 	"strings"
 )
 
-// filteredEnv 返回当前进程环境变量，去除含 "CLAUDECODE" 的条目，
-// 避免 claude 拒绝嵌套启动。
+// filteredEnv returns the current process environment variables with any entries
+// containing "CLAUDECODE" removed, to prevent claude from refusing nested launches.
 func filteredEnv() []string {
 	env := os.Environ()
 	out := make([]string, 0, len(env))

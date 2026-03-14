@@ -1,7 +1,7 @@
-// Package session 管理每个 bot/chat/topic 的 Claude 会话 ID 持久化。
-// 会话文件存储在 workspace/.claudeclaw/sessions/{botName}/{chatID}/{topicID}.json，
-// 确保重启后 --resume 标志能恢复上次对话上下文。
-// 每个 Telegram topic（论坛话题）拥有独立的 Claude 会话，topicID=0 表示普通聊天。
+// Package session manages Claude session ID persistence for each bot/chat/topic.
+// Session files are stored at workspace/.claudeclaw/sessions/{botName}/{chatID}/{topicID}.json,
+// ensuring the --resume flag can restore the last conversation context after a restart.
+// Each Telegram topic (forum thread) has its own Claude session; topicID=0 means a regular chat.
 package session
 
 import (
@@ -16,36 +16,36 @@ import (
 
 const sessionDir = ".claudeclaw/sessions"
 
-// SessionData 会话文件的 JSON 结构，与 claudeclaw 格式兼容。
+// SessionData is the JSON structure of a session file, compatible with claudeclaw format.
 type SessionData struct {
 	SessionID  string `json:"sessionId"`
 	CreatedAt  string `json:"createdAt"`
 	LastUsedAt string `json:"lastUsedAt"`
 }
 
-// sessionKey 会话的复合键（bot + chat + topic）。
+// sessionKey is the composite key for a session (bot + chat + topic).
 type sessionKey struct {
 	botName string
 	chatID  int64
 	topicID int
 }
 
-// Manager 管理多个 bot/chat/topic 的会话 ID，并发安全。
+// Manager manages session IDs for multiple bot/chat/topic combinations; concurrency-safe.
 type Manager struct {
 	mu       sync.RWMutex
-	sessions map[sessionKey]string // key → session ID（内存缓存）
+	sessions map[sessionKey]string // key → session ID (in-memory cache)
 }
 
-// New 返回一个新的 Manager 实例。
+// New returns a new Manager instance.
 func New() *Manager {
 	return &Manager{
 		sessions: make(map[sessionKey]string),
 	}
 }
 
-// Get 返回指定 bot/chat/topic 的会话 ID，同时更新 lastUsedAt 并回写磁盘。
-// 优先从内存缓存读取；缓存未命中时从磁盘加载。
-// 如果没有已知会话，返回空字符串（调用方应不带 --resume 运行）。
+// Get returns the session ID for the given bot/chat/topic, updating lastUsedAt and flushing to disk.
+// Reads from in-memory cache first; falls back to disk on a cache miss.
+// Returns an empty string if no session is known (caller should run without --resume).
 func (m *Manager) Get(workspace, botName string, chatID int64, topicID int) string {
 	key := sessionKey{botName, chatID, topicID}
 
@@ -53,12 +53,12 @@ func (m *Manager) Get(workspace, botName string, chatID int64, topicID int) stri
 	id, ok := m.sessions[key]
 	m.mu.RUnlock()
 	if ok {
-		// 更新 lastUsedAt
+		// Update lastUsedAt
 		_ = m.touchLastUsed(workspace, botName, chatID, topicID, id)
 		return id
 	}
 
-	// 从磁盘读取，并写入缓存
+	// Load from disk and populate cache
 	data := m.load(workspace, botName, chatID, topicID)
 	if data == nil {
 		return ""
@@ -68,13 +68,13 @@ func (m *Manager) Get(workspace, botName string, chatID int64, topicID int) stri
 		m.mu.Lock()
 		m.sessions[key] = id
 		m.mu.Unlock()
-		// 更新 lastUsedAt
+		// Update lastUsedAt
 		_ = m.touchLastUsed(workspace, botName, chatID, topicID, id)
 	}
 	return id
 }
 
-// Set 更新指定 bot/chat/topic 的会话 ID，同时持久化到磁盘。
+// Set updates the session ID for the given bot/chat/topic and persists it to disk.
 func (m *Manager) Set(workspace, botName string, chatID int64, topicID int, sessionID string) error {
 	key := sessionKey{botName, chatID, topicID}
 	m.mu.Lock()
@@ -83,7 +83,7 @@ func (m *Manager) Set(workspace, botName string, chatID int64, topicID int, sess
 	return m.save(workspace, botName, chatID, topicID, sessionID)
 }
 
-// Clear 清除 bot/chat/topic 的会话记录（下次运行将开启新会话）。
+// Clear removes the session record for a bot/chat/topic (next run will start a new session).
 func (m *Manager) Clear(workspace, botName string, chatID int64, topicID int) error {
 	key := sessionKey{botName, chatID, topicID}
 	m.mu.Lock()
@@ -92,9 +92,9 @@ func (m *Manager) Clear(workspace, botName string, chatID int64, topicID int) er
 
 	path := sessionFilePath(workspace, botName, chatID, topicID)
 	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
-		return fmt.Errorf("清除会话文件失败 %s: %w", path, err)
+		return fmt.Errorf("failed to remove session file %s: %w", path, err)
 	}
-	slog.Info("会话已清除",
+	slog.Info("session cleared",
 		"workspace", workspace,
 		"bot", botName,
 		"chat_id", chatID,
@@ -102,29 +102,29 @@ func (m *Manager) Clear(workspace, botName string, chatID int64, topicID int) er
 	return nil
 }
 
-// touchLastUsed 更新会话文件中的 lastUsedAt 字段。
+// touchLastUsed updates the lastUsedAt field in the session file.
 func (m *Manager) touchLastUsed(workspace, botName string, chatID int64, topicID int, sessionID string) error {
 	path := sessionFilePath(workspace, botName, chatID, topicID)
 	data, err := readSessionFile(path)
 	if err != nil || data == nil {
-		// 文件不存在时不视为错误，忽略
+		// Not an error if the file doesn't exist
 		return nil
 	}
 	data.LastUsedAt = time.Now().UTC().Format(time.RFC3339)
 	return writeSessionFile(path, data)
 }
 
-// load 从磁盘读取会话数据。
+// load reads session data from disk.
 func (m *Manager) load(workspace, botName string, chatID int64, topicID int) *SessionData {
 	path := sessionFilePath(workspace, botName, chatID, topicID)
 	data, err := readSessionFile(path)
 	if err != nil {
 		if !os.IsNotExist(err) {
-			slog.Warn("读取会话文件失败", "path", path, "err", err)
+			slog.Warn("failed to read session file", "path", path, "err", err)
 		}
 		return nil
 	}
-	slog.Debug("从磁盘加载会话",
+	slog.Debug("session loaded from disk",
 		"bot", botName,
 		"chat_id", chatID,
 		"topic_id", topicID,
@@ -132,19 +132,19 @@ func (m *Manager) load(workspace, botName string, chatID int64, topicID int) *Se
 	return data
 }
 
-// save 将会话 ID 写入磁盘（原子写：先写临时文件再重命名）。
-// 若文件已存在，保留 createdAt；否则使用当前时间。
+// save writes the session ID to disk (atomic write: write temp file then rename).
+// Preserves createdAt if the file already exists; otherwise uses the current time.
 func (m *Manager) save(workspace, botName string, chatID int64, topicID int, sessionID string) error {
 	path := sessionFilePath(workspace, botName, chatID, topicID)
 
-	// 确保目录存在
+	// Ensure directory exists
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-		return fmt.Errorf("创建会话目录失败: %w", err)
+		return fmt.Errorf("failed to create session directory: %w", err)
 	}
 
 	now := time.Now().UTC().Format(time.RFC3339)
 
-	// 读取已有文件以保留 createdAt
+	// Read existing file to preserve createdAt
 	existing, _ := readSessionFile(path)
 	createdAt := now
 	if existing != nil && existing.CreatedAt != "" {
@@ -160,7 +160,7 @@ func (m *Manager) save(workspace, botName string, chatID int64, topicID int, ses
 	return writeSessionFile(path, data)
 }
 
-// readSessionFile 读取并解析 JSON 会话文件。
+// readSessionFile reads and parses a JSON session file.
 func readSessionFile(path string) (*SessionData, error) {
 	raw, err := os.ReadFile(path)
 	if err != nil {
@@ -168,33 +168,33 @@ func readSessionFile(path string) (*SessionData, error) {
 	}
 	var data SessionData
 	if err := json.Unmarshal(raw, &data); err != nil {
-		return nil, fmt.Errorf("解析会话文件失败: %w", err)
+		return nil, fmt.Errorf("failed to parse session file: %w", err)
 	}
 	return &data, nil
 }
 
-// writeSessionFile 原子写入 JSON 会话文件。
+// writeSessionFile atomically writes a JSON session file.
 func writeSessionFile(path string, data *SessionData) error {
 	raw, err := json.MarshalIndent(data, "", "  ")
 	if err != nil {
-		return fmt.Errorf("序列化会话数据失败: %w", err)
+		return fmt.Errorf("failed to serialize session data: %w", err)
 	}
 
 	tmpPath := path + ".tmp"
 	if err := os.WriteFile(tmpPath, raw, 0o600); err != nil {
-		return fmt.Errorf("写入临时会话文件失败: %w", err)
+		return fmt.Errorf("failed to write temp session file: %w", err)
 	}
 	if err := os.Rename(tmpPath, path); err != nil {
-		return fmt.Errorf("重命名会话文件失败: %w", err)
+		return fmt.Errorf("failed to rename session file: %w", err)
 	}
-	slog.Debug("会话已持久化",
+	slog.Debug("session persisted",
 		"path", path,
 		"session_id", data.SessionID)
 	return nil
 }
 
-// sessionFilePath 返回会话文件的完整路径。
-// 格式：{workspace}/.claudeclaw/sessions/{botName}/{chatID}/{topicID}.json
+// sessionFilePath returns the full path to a session file.
+// Format: {workspace}/.claudeclaw/sessions/{botName}/{chatID}/{topicID}.json
 func sessionFilePath(workspace, botName string, chatID int64, topicID int) string {
 	return filepath.Join(
 		workspace,

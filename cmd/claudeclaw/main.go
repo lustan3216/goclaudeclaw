@@ -1,13 +1,13 @@
-// goclaudeclaw — Telegram ↔ Claude Code CLI 桥接守护进程
+// goclaudeclaw — Telegram ↔ Claude Code CLI bridge daemon
 //
-// 主要功能：
-//   - 多 bot 支持（每个 bot 独立 goroutine）
-//   - 消息防抖与前台/后台任务自动分类
-//   - 每个 workspace 串行执行队列
-//   - 心跳定时提示（含静默窗口）
-//   - cron 任务调度
-//   - 配置热重载（fsnotify）
-//   - claude-mem 共享记忆集成
+// Key features:
+//   - Multi-bot support (each bot runs in its own goroutine)
+//   - Message debouncing with automatic foreground/background task classification
+//   - Per-workspace serial execution queue
+//   - Heartbeat scheduling with quiet windows
+//   - Cron job scheduling
+//   - Hot config reload (fsnotify)
+//   - claude-mem shared memory integration
 package main
 
 import (
@@ -30,8 +30,8 @@ import (
 	"github.com/lustan3216/claudeclaw/internal/session"
 )
 
-// version 在构建时通过 ldflags 注入到 buildinfo.Version。
-// 保留此变量用于 cobra root 命令的 Version 字段。
+// version is injected at build time via ldflags into buildinfo.Version.
+// Kept here for the cobra root command Version field.
 var version = buildinfo.Version
 
 func main() {
@@ -40,7 +40,7 @@ func main() {
 	}
 }
 
-// cliFlags 聚合所有命令行标志。
+// cliFlags aggregates all command-line flags.
 type cliFlags struct {
 	configPath string
 	pidFile    string
@@ -61,58 +61,58 @@ func newRootCmd() *cobra.Command {
 		},
 	}
 
-	root.PersistentFlags().StringVarP(&flags.configPath, "config", "c", "config.json", "配置文件路径")
-	root.PersistentFlags().StringVar(&flags.pidFile, "pid-file", "", "PID 文件路径（留空则不写入）")
-	root.PersistentFlags().StringVar(&flags.claudePath, "claude", "claude", "claude 二进制路径")
-	root.PersistentFlags().BoolVar(&flags.debug, "debug", false, "开启调试日志")
+	root.PersistentFlags().StringVarP(&flags.configPath, "config", "c", "config.json", "path to config file")
+	root.PersistentFlags().StringVar(&flags.pidFile, "pid-file", "", "path to PID file (omit to disable)")
+	root.PersistentFlags().StringVar(&flags.claudePath, "claude", "claude", "path to claude binary")
+	root.PersistentFlags().BoolVar(&flags.debug, "debug", false, "enable debug logging")
 
-	// 子命令
+	// Subcommands
 	root.AddCommand(newVersionCmd())
 	root.AddCommand(newValidateCmd(flags))
 
 	return root
 }
 
-// run 是守护进程的主入口：初始化所有组件，启动服务，等待信号。
+// run is the daemon's main entry point: initializes all components, starts services, waits for signals.
 func run(flags *cliFlags) error {
 	daemon.SetupLogger(flags.debug)
 
-	slog.Info("goclaudeclaw 启动", "version", version, "config", flags.configPath)
+	slog.Info("goclaudeclaw starting", "version", version, "config", flags.configPath)
 
-	// ── 1. 加载配置 ────────────────────────────────────────────────
+	// ── 1. Load config ────────────────────────────────────────────────
 	cfgManager, err := config.New(flags.configPath)
 	if err != nil {
-		return fmt.Errorf("配置加载失败: %w", err)
+		return fmt.Errorf("failed to load config: %w", err)
 	}
 	cfg := cfgManager.Get()
 
-	// ── 2. PID 文件（可选）──────────────────────────────────────────
+	// ── 2. PID file (optional) ──────────────────────────────────────────
 	var pidFile *daemon.PIDFile
 	if flags.pidFile != "" {
 		pidFile = daemon.NewPIDFile(flags.pidFile)
 		if err := pidFile.Write(); err != nil {
-			return fmt.Errorf("PID 文件错误: %w", err)
+			return fmt.Errorf("PID file error: %w", err)
 		}
 		defer pidFile.Remove()
 	}
 
-	// ── 3. 根上下文（信号取消）──────────────────────────────────────
+	// ── 3. Root context (signal cancellation) ──────────────────────────────────────────
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	// ── 4. claude-mem 健康检查 ──────────────────────────────────────
+	// ── 4. claude-mem health check ──────────────────────────────────────────
 	memClient := memory.New(cfg.Memory.Endpoint)
 	if err := memClient.Health(ctx); err != nil {
-		// 记忆服务不可用时仅警告，不阻塞启动
-		slog.Warn("claude-mem 服务不可达，记忆功能将不可用", "err", err)
+		// Warn only when memory service is unavailable — don't block startup
+		slog.Warn("claude-mem service unreachable, memory features will be unavailable", "err", err)
 	} else {
-		slog.Info("claude-mem 连接正常", "endpoint", cfg.Memory.Endpoint)
+		slog.Info("claude-mem connected", "endpoint", cfg.Memory.Endpoint)
 	}
 
-	// ── 5. MCP 配置生成 ─────────────────────────────────────────────
+	// ── 5. MCP config generation ─────────────────────────────────────────
 	workspace := resolvePath(cfg.Workspace)
 	if err := mcp.ApplyConfig(workspace, cfg.MCPs); err != nil {
-		slog.Warn("MCP 配置生成失败，忽略", "err", err)
+		slog.Warn("MCP config generation failed, skipping", "err", err)
 	}
 
 	// ── 6. Session Manager ──────────────────────────────────────────
@@ -124,56 +124,56 @@ func run(flags *cliFlags) error {
 	// ── 8. Telegram Bot Manager ─────────────────────────────────────
 	botMgr, err := bot.NewManager(cfg, cfgManager, runnerMgr, sessionMgr)
 	if err != nil {
-		return fmt.Errorf("初始化 bot 失败: %w", err)
+		return fmt.Errorf("failed to initialize bot: %w", err)
 	}
 
 	// ── 9. Heartbeat ────────────────────────────────────────────────
 	hb, err := scheduler.NewHeartbeat(&cfg.Heartbeat, runnerMgr, workspace, botMgr.Send)
 	if err != nil {
-		return fmt.Errorf("初始化心跳失败: %w", err)
+		return fmt.Errorf("failed to initialize heartbeat: %w", err)
 	}
 
 	// ── 10. Cron Scheduler ──────────────────────────────────────────
 	cronSched := scheduler.NewCronScheduler(runnerMgr, workspace)
 	if err := cronSched.LoadJobs(ctx, cfg.CronJobs); err != nil {
-		return fmt.Errorf("加载 cron 任务失败: %w", err)
+		return fmt.Errorf("failed to load cron jobs: %w", err)
 	}
 	cronSched.Start()
 	defer cronSched.Stop(ctx)
 
-	// ── 11. 配置热重载回调 ───────────────────────────────────────────
+	// ── 11. Config hot-reload callback ───────────────────────────────────────────
 	cfgManager.OnChange(func(newCfg *config.Config) {
-		slog.Info("配置热重载生效")
+		slog.Info("config hot-reload applied")
 		runnerMgr.UpdateConfig(newCfg)
 		botMgr.UpdateConfig(newCfg)
 		if err := cronSched.LoadJobs(ctx, newCfg.CronJobs); err != nil {
-			slog.Error("热重载 cron 任务失败", "err", err)
+			slog.Error("failed to hot-reload cron jobs", "err", err)
 		}
-		// MCP 配置变更时重新生成 .mcp.json
+		// Regenerate .mcp.json when MCP config changes
 		if err := mcp.ApplyConfig(workspace, newCfg.MCPs); err != nil {
-			slog.Warn("热重载 MCP 配置失败", "err", err)
+			slog.Warn("failed to hot-reload MCP config", "err", err)
 		}
 	})
 
-	// ── 12. 启动各服务 ──────────────────────────────────────────────
-	// 心跳（独立 goroutine）
+	// ── 12. Start all services ──────────────────────────────────────────
+	// Heartbeat (independent goroutine)
 	go hb.Start(ctx)
 
-	// 所有 bot（各自独立 goroutine，内部等待 ctx 取消）
+	// All bots (each in its own goroutine, waiting internally for ctx cancellation)
 	go botMgr.Run(ctx)
 
-	slog.Info("所有服务已启动，等待信号...",
+	slog.Info("all services started, waiting for signal...",
 		"workspace", workspace,
 		"bots", len(cfg.Bots))
 
-	// ── 13. 等待停止信号 ─────────────────────────────────────────────
+	// ── 13. Wait for shutdown signal ─────────────────────────────────────────
 	daemon.WaitForShutdown(cancel)
 
-	slog.Info("优雅关闭完成，再见 ⚡")
+	slog.Info("graceful shutdown complete, goodbye ⚡")
 	return nil
 }
 
-// resolvePath 将相对路径转为绝对路径，"." 展开为当前工作目录。
+// resolvePath converts a relative path to an absolute path; "." expands to the current working directory.
 func resolvePath(p string) string {
 	if filepath.IsAbs(p) {
 		return p
@@ -185,28 +185,28 @@ func resolvePath(p string) string {
 	return abs
 }
 
-// newVersionCmd 返回 version 子命令。
+// newVersionCmd returns the version subcommand.
 func newVersionCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "version",
-		Short: "打印版本信息",
+		Short: "Print version info",
 		Run: func(cmd *cobra.Command, args []string) {
 			fmt.Printf("goclaudeclaw %s\n", version)
 		},
 	}
 }
 
-// newValidateCmd 返回 validate 子命令，用于校验配置文件合法性。
+// newValidateCmd returns the validate subcommand for checking config file validity.
 func newValidateCmd(flags *cliFlags) *cobra.Command {
 	return &cobra.Command{
 		Use:   "validate",
-		Short: "校验配置文件",
+		Short: "Validate config file",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			_, err := config.New(flags.configPath)
 			if err != nil {
-				return fmt.Errorf("配置无效: %w", err)
+				return fmt.Errorf("invalid config: %w", err)
 			}
-			fmt.Println("✓ 配置文件有效")
+			fmt.Println("✓ Config file is valid")
 			return nil
 		},
 	}

@@ -1,6 +1,6 @@
-// Package mcp 负责根据 config.json 中的 mcps 配置，
-// 自动生成或更新 workspace 下的 .mcp.json 文件，
-// 让 claude -p 启动时自动加载对应的 MCP 服务器。
+// Package mcp generates or updates the .mcp.json file under the workspace
+// based on the mcps config in config.json, so that `claude -p` automatically
+// loads the corresponding MCP servers on startup.
 package mcp
 
 import (
@@ -16,21 +16,22 @@ import (
 	"github.com/lustan3216/claudeclaw/internal/config"
 )
 
-// serverDef 单个 MCP 服务器的命令定义。
+// serverDef holds the command definition for a single MCP server.
 type serverDef struct {
 	Command string            `json:"command"`
 	Args    []string          `json:"args"`
 	Env     map[string]string `json:"env,omitempty"`
 }
 
-// mcpFile 是 .mcp.json 的文件结构。
+// mcpFile is the file structure for .mcp.json.
 type mcpFile struct {
 	MCPServers map[string]serverDef `json:"mcpServers"`
 }
 
-// ApplyConfig 根据 cfg.MCPs 生成/更新 workspace/.mcp.json。
-// 只写入 token 不为空（或 enabled=true）的服务器，其余跳过。
-// 写入完成后会在后台 pre-warm 所有 npx 包的缓存，避免 Claude 启动时因首次下载超时。
+// ApplyConfig generates/updates workspace/.mcp.json based on cfg.MCPs.
+// Only servers with a non-empty token (or enabled=true) are written; others are skipped.
+// After writing, all npx package caches are pre-warmed in the background to avoid
+// timeout on first download when Claude starts.
 func ApplyConfig(workspace string, mcps config.MCPsConfig) error {
 	servers := make(map[string]serverDef)
 
@@ -57,7 +58,7 @@ func ApplyConfig(workspace string, mcps config.MCPsConfig) error {
 		}
 	}
 
-	// Puppeteer 浏览器 MCP（不需要 token，只需 enabled）
+	// Puppeteer browser MCP (no token needed, just enabled)
 	if mcps.Browser.Enabled {
 		servers["puppeteer"] = serverDef{
 			Command: "npx",
@@ -65,7 +66,7 @@ func ApplyConfig(workspace string, mcps config.MCPsConfig) error {
 		}
 	}
 
-	// Brave 搜索 MCP
+	// Brave Search MCP
 	if mcps.Brave.APIKey != "" {
 		servers["brave-search"] = serverDef{
 			Command: "npx",
@@ -74,7 +75,7 @@ func ApplyConfig(workspace string, mcps config.MCPsConfig) error {
 		}
 	}
 
-	// Gemini MCP（依赖本机 Gemini CLI 认证，无需 token）
+	// Gemini MCP (relies on local Gemini CLI auth, no token required)
 	if mcps.Gemini.Enabled {
 		servers["gemini"] = serverDef{
 			Command: "npx",
@@ -84,34 +85,35 @@ func ApplyConfig(workspace string, mcps config.MCPsConfig) error {
 
 	dest := filepath.Join(workspace, ".mcp.json")
 
-	// 如果没有任何启用的服务器，删除文件（如果存在）
+	// If no servers are enabled, remove the file (if it exists)
 	if len(servers) == 0 {
 		if err := os.Remove(dest); err != nil && !os.IsNotExist(err) {
-			return fmt.Errorf("删除 .mcp.json 失败: %w", err)
+			return fmt.Errorf("failed to remove .mcp.json: %w", err)
 		}
-		slog.Info("MCP 配置：无启用服务器，已清理 .mcp.json")
+		slog.Info("MCP config: no enabled servers, .mcp.json removed")
 		return nil
 	}
 
 	data, err := json.MarshalIndent(mcpFile{MCPServers: servers}, "", "  ")
 	if err != nil {
-		return fmt.Errorf("序列化 .mcp.json 失败: %w", err)
+		return fmt.Errorf("failed to serialize .mcp.json: %w", err)
 	}
 
 	if err := os.WriteFile(dest, data, 0o644); err != nil {
-		return fmt.Errorf("写入 .mcp.json 失败: %w", err)
+		return fmt.Errorf("failed to write .mcp.json: %w", err)
 	}
 
-	slog.Info("MCP 配置已更新", "path", dest, "servers", keys(servers))
+	slog.Info("MCP config updated", "path", dest, "servers", keys(servers))
 
-	// 后台 pre-warm：提前下载/缓存所有 npx 包，避免 Claude 启动 MCP 时因首次下载超时
+	// Background pre-warm: download/cache all npx packages in advance to avoid
+	// timeout on first download when Claude starts an MCP server
 	go prewarmNpxPackages(servers)
 
 	return nil
 }
 
-// prewarmNpxPackages 后台并发运行 `npx -y <package> --version`，
-// 触发 npm 下载并缓存，后续 Claude 启动 MCP server 时直接使用本地缓存。
+// prewarmNpxPackages concurrently runs `npx -y <package> --version` in the background
+// to trigger npm download and caching, so subsequent Claude MCP server starts use the local cache.
 func prewarmNpxPackages(servers map[string]serverDef) {
 	for name, srv := range servers {
 		if srv.Command != "npx" || len(srv.Args) < 2 {
@@ -121,11 +123,11 @@ func prewarmNpxPackages(servers map[string]serverDef) {
 		go func(serverName, pkg string) {
 			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 			defer cancel()
-			// 用 --version 触发下载，忽略输出和错误（有些包不支持 --version 也没关系）
+			// Use --version to trigger download; ignore output and errors (some packages don't support --version)
 			cmd := exec.CommandContext(ctx, "npx", "-y", pkg, "--version")
 			cmd.Env = os.Environ()
 			_ = cmd.Run()
-			slog.Debug("MCP package pre-warm 完成", "server", serverName, "package", pkg)
+			slog.Debug("MCP package pre-warm complete", "server", serverName, "package", pkg)
 		}(name, pkg)
 	}
 }

@@ -1,5 +1,5 @@
-// Package bot 实现每个 Telegram Bot 的长轮询 goroutine。
-// 每个 bot 独立运行，共享 runner.Manager 和 session.Manager。
+// Package bot implements the long-polling goroutine for each Telegram Bot.
+// Each bot runs independently, sharing runner.Manager and session.Manager.
 package bot
 
 import (
@@ -21,14 +21,14 @@ import (
 	"github.com/lustan3216/claudeclaw/internal/session"
 )
 
-// Bot 封装单个 Telegram bot 的生命周期。
+// Bot encapsulates the lifecycle of a single Telegram bot.
 type Bot struct {
 	api        *telego.Bot
 	cfg        config.BotConfig
 	dispatcher *Dispatcher
 }
 
-// NewBot 初始化 Bot，建立 Telegram API 连接。
+// NewBot initializes a Bot and establishes the Telegram API connection.
 func NewBot(
 	botCfg config.BotConfig,
 	globalCfg *config.Config,
@@ -42,31 +42,31 @@ func NewBot(
 		return nil, err
 	}
 
-	// 获取 bot 自身信息（用于填充 username）
+	// Fetch bot's own info (to populate username)
 	self, err := api.GetMe()
 	if err != nil {
 		return nil, err
 	}
 
-	// 若 bot 配置未设置 name，使用 Telegram 返回的 username 作为默认值
+	// Use the Telegram-returned username as default if bot config has no name set
 	if botCfg.Name == "" {
 		botCfg.Name = self.Username
 	}
 
-	slog.Info("Telegram bot 已连接",
+	slog.Info("Telegram bot connected",
 		"bot_name", botCfg.Name,
 		"username", self.Username)
 
-	// 注册指令选单，让用户在 Telegram 中看到 "/" 指令列表
+	// Register command menu so users see the "/" command list in Telegram
 	_ = api.SetMyCommands(&telego.SetMyCommandsParams{
 		Commands: []telego.BotCommand{
-			{Command: "help", Description: "查看所有指令"},
-			{Command: "clear", Description: "清除 session，重载 MCP"},
-			{Command: "usage", Description: "今日 token 用量统计"},
-			{Command: "status", Description: "查看运行状态"},
-			{Command: "update", Description: "立即重启并拉取最新版本"},
-			{Command: "config", Description: "查看当前 MCP 配置"},
-			{Command: "bg", Description: "强制后台模式运行任务"},
+			{Command: "help", Description: "Show all commands"},
+			{Command: "clear", Description: "Clear session and reload MCP"},
+			{Command: "usage", Description: "Today's token usage stats"},
+			{Command: "status", Description: "Show runtime status"},
+			{Command: "update", Description: "Restart and pull latest version"},
+			{Command: "config", Description: "Show current MCP config"},
+			{Command: "bg", Description: "Force background mode for a task"},
 		},
 	})
 
@@ -79,9 +79,9 @@ func NewBot(
 	}, nil
 }
 
-// UpdateConfig 热重载：更新 bot 配置（不重建连接）。
+// UpdateConfig hot-reloads: updates bot config without rebuilding the connection.
 func (b *Bot) UpdateConfig(cfg *config.Config) {
-	// 找到对应名称的 bot 配置
+	// Find the matching bot config by name
 	for _, bc := range cfg.Bots {
 		if bc.Name == b.cfg.Name {
 			b.cfg = bc
@@ -91,7 +91,7 @@ func (b *Bot) UpdateConfig(cfg *config.Config) {
 	}
 }
 
-// sendRestartNotification 检查是否有待发的重启通知，有则发送 changelog 并删除文件。
+// sendRestartNotification checks for a pending restart notification and sends the changelog, then removes the file.
 func (b *Bot) sendRestartNotification() {
 	notifPath := b.dispatcher.restartNotifyPath()
 	data, err := os.ReadFile(notifPath)
@@ -109,40 +109,40 @@ func (b *Bot) sendRestartNotification() {
 		return
 	}
 
-	// 生成 changelog（新提交列表）
+	// Generate changelog (list of new commits)
 	var changelogPart string
 	if notif.OldCommit != "" {
 		out, err := exec.Command("git", "-C", b.dispatcher.workspace,
 			"log", notif.OldCommit+"..HEAD", "--oneline").Output()
 		if err == nil && len(strings.TrimSpace(string(out))) > 0 {
-			changelogPart = "\n\n*更新內容*\n```\n" + strings.TrimSpace(string(out)) + "\n```"
+			changelogPart = "\n\n*What's new*\n```\n" + strings.TrimSpace(string(out)) + "\n```"
 		}
 	}
 
-	msg := fmt.Sprintf("✅ 重啟完成，版本 `%s`%s", buildinfo.Version, changelogPart)
+	msg := fmt.Sprintf("✅ Restart complete, version `%s`%s", buildinfo.Version, changelogPart)
 	b.dispatcher.reply(notif.ChatID, notif.TopicID, msg)
-	slog.Info("重启通知已发送", "chat_id", notif.ChatID, "topic_id", notif.TopicID)
+	slog.Info("restart notification sent", "chat_id", notif.ChatID, "topic_id", notif.TopicID)
 }
 
-// Run 启动长轮询循环，阻塞直到 ctx 取消。
-// 应在独立 goroutine 中调用。
+// Run starts the long-polling loop, blocking until ctx is cancelled.
+// Should be called in its own goroutine.
 func (b *Bot) Run(ctx context.Context) {
-	slog.Info("启动 bot 长轮询", "bot", b.cfg.Name)
+	slog.Info("starting bot long polling", "bot", b.cfg.Name)
 
-	// 检查是否有待发的重启通知（/update 触发重启后发送）
+	// Check for a pending restart notification (/update triggers restart then sends)
 	go func() {
-		time.Sleep(2 * time.Second) // 等 bot 完全就绪
+		time.Sleep(2 * time.Second) // wait for bot to be fully ready
 		b.sendRestartNotification()
 	}()
 
 	updates, err := b.api.UpdatesViaLongPolling(
-		// 显式指定 message_reaction（默认不包含，需明确声明）
+		// Explicitly include message_reaction (not included by default, must be declared)
 		(&telego.GetUpdatesParams{}).WithAllowedUpdates("message", "message_reaction"),
 		telego.WithLongPollingContext(ctx),
 		telego.WithLongPollingRetryTimeout(3*time.Second),
 	)
 	if err != nil {
-		slog.Error("启动长轮询失败", "bot", b.cfg.Name, "err", err)
+		slog.Error("failed to start long polling", "bot", b.cfg.Name, "err", err)
 		return
 	}
 	defer b.api.StopLongPolling()
@@ -150,29 +150,29 @@ func (b *Bot) Run(ctx context.Context) {
 	for {
 		select {
 		case <-ctx.Done():
-			slog.Info("bot 收到停止信号，退出长轮询", "bot", b.cfg.Name)
+			slog.Info("bot received stop signal, exiting long polling", "bot", b.cfg.Name)
 			return
 
 		case update, ok := <-updates:
 			if !ok {
-				// channel 被关闭（ctx 已取消或连接断开）
-				slog.Warn("更新 channel 已关闭，bot 退出", "bot", b.cfg.Name)
+				// channel closed (ctx cancelled or connection dropped)
+				slog.Warn("update channel closed, bot exiting", "bot", b.cfg.Name)
 				return
 			}
 
-			// 在独立 goroutine 处理，防止单条消息处理慢影响轮询
-			// 注意：dispatcher 内部有防抖和串行队列，不会产生并发冲突
+			// Process in independent goroutine to prevent slow message handling from blocking polling
+			// Note: dispatcher has debouncing and serial queues internally — no concurrency conflicts
 			go b.dispatcher.Handle(ctx, update)
 		}
 	}
 }
 
-// Manager 管理所有 bot 实例的生命周期。
+// Manager manages the lifecycle of all bot instances.
 type Manager struct {
 	bots []*Bot
 }
 
-// NewManager 根据配置初始化所有 bot 实例。
+// NewManager initializes all bot instances from config.
 func NewManager(
 	cfg *config.Config,
 	cfgMgr *config.Manager,
@@ -190,8 +190,8 @@ func NewManager(
 	return &Manager{bots: bots}, nil
 }
 
-// Run 并发启动所有 bot，阻塞直到所有 bot goroutine 退出。
-// 通常由 ctx 取消触发退出。
+// Run starts all bots concurrently, blocking until all bot goroutines exit.
+// Exit is typically triggered by ctx cancellation.
 func (m *Manager) Run(ctx context.Context) {
 	var wg sync.WaitGroup
 	for _, b := range m.bots {
@@ -203,10 +203,10 @@ func (m *Manager) Run(ctx context.Context) {
 		}()
 	}
 	wg.Wait()
-	slog.Info("所有 bot 已退出")
+	slog.Info("all bots exited")
 }
 
-// Send 使用第一个 bot 向指定 chat 发送消息（心跳等系统消息使用）。
+// Send uses the first bot to send a message to the specified chat (used for heartbeat and system messages).
 func (m *Manager) Send(chatID int64, topicID int, text string) {
 	if len(m.bots) == 0 {
 		return
@@ -214,7 +214,7 @@ func (m *Manager) Send(chatID int64, topicID int, text string) {
 	m.bots[0].dispatcher.reply(chatID, topicID, text)
 }
 
-// UpdateConfig 向所有 bot 广播配置更新。
+// UpdateConfig broadcasts a config update to all bots.
 func (m *Manager) UpdateConfig(cfg *config.Config) {
 	for _, b := range m.bots {
 		b.UpdateConfig(cfg)

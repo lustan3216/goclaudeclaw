@@ -1,14 +1,14 @@
-// sections.go 实现 memory.md 的 section 解析与相关性评分。
+// sections.go implements section parsing and relevance scoring for memory.md.
 //
-// Section 格式（HTML 注释 header）：
+// Section format (HTML comment header):
 //
-//	<!-- section: name tags: tag1,tag2,中文,english -->
+//	<!-- section: name tags: tag1,tag2,chinese,english -->
 //	## Section Title
 //	content...
 //
-// "always" tag 的 section 每次都注入（适合全局偏好等）。
-// 其他 section 按 tag 命中数量评分，只注入相关的。
-// 若文件没有 section 标记，整体作为 global/always section 降级处理。
+// Sections with the "always" tag are injected every time (suitable for global preferences, etc.).
+// Other sections are scored by tag hit count and only relevant ones are injected.
+// If the file has no section markers, the whole file is treated as a global/always section (backward-compatible).
 package memory
 
 import (
@@ -16,28 +16,28 @@ import (
 	"strings"
 )
 
-// maxExtraSections 控制 always 之外最多注入几个额外 section。
+// maxExtraSections controls the maximum number of extra sections injected beyond the "always" ones.
 const maxExtraSections = 3
 
-// maxSectionBytes 单个 section 的字节上限（防止一个超大 section 吃掉所有 token）。
+// maxSectionBytes is the byte limit for a single section (prevents one huge section consuming all tokens).
 const maxSectionBytes = 1500
 
 var sectionHeaderRe = regexp.MustCompile(
 	`<!--\s*section:\s*(\S+)\s+tags:\s*([^-]+?)\s*-->`)
 
-// Section 代表 memory.md 中一个独立记忆片段。
+// Section represents an independent memory fragment in memory.md.
 type Section struct {
 	Name    string
-	Tags    []string // 包含双语同义词，"always" = 每次注入
+	Tags    []string // includes bilingual synonyms; "always" = inject every time
 	Content string
 }
 
-// ParseSections 将 memory.md 内容解析为 Section 列表。
-// 若未找到 section 标记，返回单个 global/always section（向后兼容）。
+// ParseSections parses memory.md content into a list of Sections.
+// If no section markers are found, returns a single global/always section (backward-compatible).
 func ParseSections(content string) []Section {
 	matches := sectionHeaderRe.FindAllStringIndex(content, -1)
 	if len(matches) == 0 {
-		// 旧格式或手写文件，整体作为 always section
+		// Old format or hand-written file; treat the whole thing as an always section
 		return []Section{{
 			Name:    "global",
 			Tags:    []string{"always"},
@@ -59,7 +59,7 @@ func ParseSections(content string) []Section {
 			}
 		}
 
-		// section 内容：从 header 结束到下一个 header 开始
+		// Section content: from end of header to start of next header
 		start := match[1]
 		end := len(content)
 		if i+1 < len(matches) {
@@ -75,10 +75,10 @@ func ParseSections(content string) []Section {
 	return sections
 }
 
-// SelectRelevant 根据 prompt 关键词选出相关 sections。
+// SelectRelevant selects relevant sections based on prompt keywords.
 //
-//   - "always" tag 的 section 始终包含
-//   - 其他 section 按 tag 命中数量排序，取 top maxExtraSections 个
+//   - Sections with the "always" tag are always included
+//   - Other sections are sorted by tag hit count; top maxExtraSections are selected
 func SelectRelevant(sections []Section, prompt string) []Section {
 	promptLower := strings.ToLower(prompt)
 
@@ -103,7 +103,7 @@ func SelectRelevant(sections []Section, prompt string) []Section {
 			continue
 		}
 
-		// 计算 tag 命中分数（每个 tag 出现在 prompt 中算 1 分）
+		// Calculate tag hit score (1 point per tag that appears in the prompt)
 		score := 0
 		for _, t := range sec.Tags {
 			if t != "" && strings.Contains(promptLower, t) {
@@ -115,7 +115,7 @@ func SelectRelevant(sections []Section, prompt string) []Section {
 		}
 	}
 
-	// 按分数降序排序（sections 数量通常很少，简单插入排序即可）
+	// Sort by score descending (section count is usually small, simple insertion sort is fine)
 	for i := 1; i < len(others); i++ {
 		for j := i; j > 0 && others[j].score > others[j-1].score; j-- {
 			others[j], others[j-1] = others[j-1], others[j]
@@ -133,7 +133,7 @@ func SelectRelevant(sections []Section, prompt string) []Section {
 	return result
 }
 
-// BuildInjection 将选中的 sections 内容拼接为注入字符串。
+// BuildInjection concatenates the content of selected sections into an injection string.
 func BuildInjection(sections []Section) string {
 	if len(sections) == 0 {
 		return ""

@@ -1,5 +1,5 @@
-// cron.go 实现基于配置的定时任务调度。
-// 任务定义使用标准 cron 表达式，支持秒级精度（通过 robfig/cron v3）。
+// cron.go implements config-driven cron job scheduling.
+// Jobs use standard cron expressions with second-level precision (via robfig/cron v3).
 package scheduler
 
 import (
@@ -13,20 +13,20 @@ import (
 	"github.com/lustan3216/claudeclaw/internal/runner"
 )
 
-// CronScheduler 管理所有 cron 任务的生命周期。
+// CronScheduler manages the lifecycle of all cron jobs.
 type CronScheduler struct {
 	c         *cron.Cron
 	runnerMgr *runner.Manager
-	workspace string // 全局默认 workspace
-	entryIDs  map[string]cron.EntryID // job name → entry ID，用于动态更新
+	workspace string              // global default workspace
+	entryIDs  map[string]cron.EntryID // job name → entry ID, for dynamic updates
 }
 
-// NewCronScheduler 创建 CronScheduler。
-// 使用秒级精度解析器（5 字段 cron 表达式）。
+// NewCronScheduler creates a CronScheduler.
+// Uses a second-precision parser (5-field cron expression).
 func NewCronScheduler(runnerMgr *runner.Manager, workspace string) *CronScheduler {
 	c := cron.New(
-		cron.WithSeconds(),                          // 支持秒级精度
-		cron.WithChain(cron.SkipIfStillRunning(     // 上一次未完成时跳过
+		cron.WithSeconds(),                      // enable second-level precision
+		cron.WithChain(cron.SkipIfStillRunning( // skip if previous run hasn't finished
 			cron.DefaultLogger,
 		)),
 		cron.WithLogger(cron.DefaultLogger),
@@ -40,10 +40,10 @@ func NewCronScheduler(runnerMgr *runner.Manager, workspace string) *CronSchedule
 	}
 }
 
-// LoadJobs 从配置加载所有 cron 任务。
-// 可在热重载时重复调用，会先清除所有旧任务再重新注册。
+// LoadJobs loads all cron jobs from config.
+// Can be called repeatedly on hot-reload; removes all old jobs before re-registering.
 func (s *CronScheduler) LoadJobs(ctx context.Context, jobs []config.CronJob) error {
-	// 清除旧任务
+	// Remove old jobs
 	for _, id := range s.entryIDs {
 		s.c.Remove(id)
 	}
@@ -51,15 +51,15 @@ func (s *CronScheduler) LoadJobs(ctx context.Context, jobs []config.CronJob) err
 
 	for _, job := range jobs {
 		if err := s.addJob(ctx, job); err != nil {
-			return fmt.Errorf("注册 cron 任务 %q 失败: %w", job.Name, err)
+			return fmt.Errorf("failed to register cron job %q: %w", job.Name, err)
 		}
 	}
 
-	slog.Info("cron 任务加载完成", "count", len(jobs))
+	slog.Info("cron jobs loaded", "count", len(jobs))
 	return nil
 }
 
-// addJob 注册单条 cron 任务。
+// addJob registers a single cron job.
 func (s *CronScheduler) addJob(ctx context.Context, job config.CronJob) error {
 	ws := job.Workspace
 	if ws == "" {
@@ -67,12 +67,12 @@ func (s *CronScheduler) addJob(ctx context.Context, job config.CronJob) error {
 	}
 
 	entryID, err := s.c.AddFunc(job.Schedule, func() {
-		slog.Info("cron 任务触发", "name", job.Name, "workspace", ws)
+		slog.Info("cron job triggered", "name", job.Name, "workspace", ws)
 		s.runnerMgr.Submit(runner.Job{
 			Ctx:       ctx,
 			Workspace: ws,
 			Prompt:    job.Prompt,
-			Mode:      runner.ModeBackground, // cron 任务均以后台模式运行
+			Mode:      runner.ModeBackground, // cron jobs always run in background mode
 			ResultCh:  nil,
 		})
 	})
@@ -81,31 +81,31 @@ func (s *CronScheduler) addJob(ctx context.Context, job config.CronJob) error {
 	}
 
 	s.entryIDs[job.Name] = entryID
-	slog.Info("已注册 cron 任务",
+	slog.Info("cron job registered",
 		"name", job.Name,
 		"schedule", job.Schedule,
 		"workspace", ws)
 	return nil
 }
 
-// Start 启动 cron 调度器（非阻塞，内部使用 goroutine）。
+// Start starts the cron scheduler (non-blocking, uses internal goroutine).
 func (s *CronScheduler) Start() {
 	s.c.Start()
-	slog.Info("cron 调度器已启动")
+	slog.Info("cron scheduler started")
 }
 
-// Stop 优雅停止 cron 调度器，等待当前正在执行的任务完成。
+// Stop gracefully stops the cron scheduler, waiting for any running jobs to complete.
 func (s *CronScheduler) Stop(ctx context.Context) {
 	stopCtx := s.c.Stop()
 	select {
 	case <-stopCtx.Done():
-		slog.Info("cron 调度器已停止")
+		slog.Info("cron scheduler stopped")
 	case <-ctx.Done():
-		slog.Warn("等待 cron 停止超时，强制退出")
+		slog.Warn("timed out waiting for cron to stop, forcing exit")
 	}
 }
 
-// Entries 返回所有已注册任务的调度信息（用于 /status 接口展示）。
+// Entries returns scheduling info for all registered jobs (used for /status display).
 func (s *CronScheduler) Entries() []cron.Entry {
 	return s.c.Entries()
 }
