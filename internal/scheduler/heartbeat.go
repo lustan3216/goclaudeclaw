@@ -4,6 +4,8 @@ package scheduler
 import (
 	"context"
 	"log/slog"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -94,10 +96,7 @@ func (h *Heartbeat) fire(ctx context.Context, t time.Time) {
 		return
 	}
 
-	prompt := h.cfg.Prompt
-	if prompt == "" {
-		prompt = "Check pending tasks and provide a brief status update."
-	}
+	prompt := h.buildPrompt()
 
 	slog.Info("触发心跳", "time", t.Format("15:04"), "chat_id", h.cfg.ChatID, "prompt_preview", truncate(prompt, 60))
 
@@ -123,6 +122,20 @@ func (h *Heartbeat) fire(ctx context.Context, t time.Time) {
 			h.sendFn(h.cfg.ChatID, h.cfg.TopicID, output)
 		}
 	}()
+}
+
+// buildPrompt 构建心跳 prompt：优先读 .goclaudeclaw/heartbeat.md，否则用配置中的 prompt。
+// heartbeat.md 是用户自定义的检查清单，agent 会评估每一项并决定是否需要通知。
+func (h *Heartbeat) buildPrompt() string {
+	checklistPath := filepath.Join(h.workspace, ".goclaudeclaw", "heartbeat.md")
+	if data, err := os.ReadFile(checklistPath); err == nil && len(data) > 0 {
+		return "請閱讀以下 heartbeat 清單，逐項評估。如果有需要通知的事項請直接說明；如果一切正常請只回覆 HEARTBEAT_OK，不要輸出其他內容。\n\n" +
+			string(data)
+	}
+	if h.cfg.Prompt != "" {
+		return h.cfg.Prompt
+	}
+	return "Check pending tasks, reminders, and anything that needs attention. If nothing needs action, reply HEARTBEAT_OK."
 }
 
 // isQuietTime 检查当前时间是否在任意静默窗口内。
