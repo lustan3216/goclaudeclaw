@@ -1,8 +1,8 @@
 ---
-name: goclaudeclaw:stop
-description: Stop the goclaudeclaw Telegram bot daemon
+name: claudeclaw:stop
+description: Stop the claudeclaw Telegram bot daemon
 ---
 
-Stop the running goclaudeclaw daemon.
+Stop the running claudeclaw daemon.
 
-Run: `goclaudeclaw stop`
+Run: `claudeclaw stop`

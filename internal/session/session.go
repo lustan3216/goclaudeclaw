@@ -1,5 +1,5 @@
 // Package session 管理每个 bot/chat/topic 的 Claude 会话 ID 持久化。
-// 会话文件存储在 workspace/.goclaudeclaw/sessions/{botName}/{chatID}/{topicID}.json，
+// 会话文件存储在 workspace/.claudeclaw/sessions/{botName}/{chatID}/{topicID}.json，
 // 确保重启后 --resume 标志能恢复上次对话上下文。
 // 每个 Telegram topic（论坛话题）拥有独立的 Claude 会话，topicID=0 表示普通聊天。
 package session
@@ -14,7 +14,7 @@ import (
 	"time"
 )
 
-const sessionDir = ".goclaudeclaw/sessions"
+const sessionDir = ".claudeclaw/sessions"
 
 // SessionData 会话文件的 JSON 结构，与 claudeclaw 格式兼容。
 type SessionData struct {
@@ -194,7 +194,7 @@ func writeSessionFile(path string, data *SessionData) error {
 }
 
 // sessionFilePath 返回会话文件的完整路径。
-// 格式：{workspace}/.goclaudeclaw/sessions/{botName}/{chatID}/{topicID}.json
+// 格式：{workspace}/.claudeclaw/sessions/{botName}/{chatID}/{topicID}.json
 func sessionFilePath(workspace, botName string, chatID int64, topicID int) string {
 	return filepath.Join(
 		workspace,

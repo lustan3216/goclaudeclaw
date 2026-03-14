@@ -1,4 +1,4 @@
-module github.com/lustan3216/goclaudeclaw
+module github.com/lustan3216/claudeclaw
 
 go 1.22.3
 

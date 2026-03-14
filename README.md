@@ -1,8 +1,8 @@
-# goclaudeclaw ⚡
+# claudeclaw ⚡
 
 **Claude Code on your phone. Tap a message, get work done.**
 
-goclaudeclaw is a Go rewrite of [ClaudeClaw](https://github.com/lustan3216/claudeclaw) — a daemon that keeps Claude Code running 24/7 and lets you talk to it over Telegram. Ask it to write code, run reports, check your project status, or kick off a long task while you're away from your desk.
+claudeclaw is a daemon that keeps Claude Code running 24/7 and lets you talk to it over Telegram. Ask it to write code, run reports, check your project status, or kick off a long task while you're away from your desk.
 
 One binary. No Node, no Bun, no runtime to babysit — unless you enable MCP servers (see [Prerequisites](#prerequisites)).
 
@@ -10,30 +10,13 @@ One binary. No Node, no Bun, no runtime to babysit — unless you enable MCP ser
 
 ## Prerequisites
 
-- **Claude Code CLI** (`claude`) — goclaudeclaw is a bridge to it, not a replacement
+- **Claude Code CLI** (`claude`) — claudeclaw is a bridge to it, not a replacement
 - **Node.js + npx** — only required if you use the built-in MCP servers (GitHub, Notion, Brave, Browser)
 
 **Why Node for MCPs?**
-The MCP ecosystem runs on Node. Every MCP server is an npm package launched via `npx`. goclaudeclaw auto-generates the `.mcp.json` config file for you — but it can't bypass the fact that `npx` needs to be on your system to actually run the server processes. The first time Claude calls a tool from an MCP server, `npx -y` downloads and starts the package automatically. After that it's cached.
+The MCP ecosystem runs on Node. Every MCP server is an npm package launched via `npx`. claudeclaw auto-generates the `.mcp.json` config file for you — but it can't bypass the fact that `npx` needs to be on your system to actually run the server processes. The first time Claude calls a tool from an MCP server, `npx -y` downloads and starts the package automatically. After that it's cached.
 
 If you don't use any MCP servers, Node is not needed at all.
-
----
-
-## Why goclaudeclaw over original ClaudeClaw?
-
-| | goclaudeclaw | claudeclaw (original) |
-|---|---|---|
-| Installation | Single binary, no runtime | Node + Bun required |
-| Multi-bot | Multiple bots, separate permissions | One bot |
-| Telegram Topics | Each topic = parallel independent session | Single thread |
-| Reactions | 👀 on receipt, ✅ on done | None |
-| Images / PDFs | Auto-download + vision / Read tool | None |
-| Voice messages | Whisper transcription → Claude | None |
-| Local memory | Auto-inject `memory.md` on new sessions | Manual |
-| Auto subagent | Long tasks auto-detected, run in background | `/bg` only |
-| Config format | JSON, hot-reload without restart | YAML, restart required |
-| Memory footprint | ~15MB idle | Heavier JS runtime |
 
 ---
 
@@ -41,17 +24,17 @@ If you don't use any MCP servers, Node is not needed at all.
 
 **One-line script:**
 ```sh
-curl -fsSL https://raw.githubusercontent.com/lustan3216/goclaudeclaw/main/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/lustan3216/claudeclaw/main/install.sh | sh
 ```
 
 **With Go:**
 ```sh
-go install github.com/lustan3216/goclaudeclaw/cmd/goclaudeclaw@latest
+go install github.com/lustan3216/claudeclaw/cmd/claudeclaw@latest
 ```
 
 **Via Claude Code plugin:**
 ```sh
-claude plugin install lustan3216/goclaudeclaw
+claude plugin install lustan3216/claudeclaw
 ```
 
 ---
@@ -83,7 +66,7 @@ Get your Telegram user ID from [@userinfobot](https://t.me/userinfobot).
 **2. Run it**
 
 ```bash
-goclaudeclaw --config config.json
+claudeclaw --config config.json
 ```
 
 That's it — Claude Code is now reachable over Telegram from anywhere.
@@ -115,7 +98,7 @@ Set `openai_api_key` in config (or `OPENAI_API_KEY` env var) to enable voice.
 
 ### Local Memory Injection
 
-Place notes in `{workspace}/.goclaudeclaw/memory.md`. On every new session, this file is automatically injected as context — giving Claude persistent knowledge about your project, preferences, and decisions without needing an external service.
+Place notes in `{workspace}/.claudeclaw/memory.md`. On every new session, this file is automatically injected as context — giving Claude persistent knowledge about your project, preferences, and decisions without needing an external service.
 
 **Smart injection:** memory.md is split into tagged sections. On each new session, only sections relevant to the current prompt are injected — saving tokens and keeping context focused.
 
@@ -146,7 +129,7 @@ While Claude processes a message, the bot sends Telegram's native `••• typ
 
 ### Auto Subagent Detection
 
-goclaudeclaw classifies each message as foreground (quick reply) or background (long task). Long tasks reply immediately and ping you when done. Use `/bg <task>` to force background mode manually.
+claudeclaw classifies each message as foreground (quick reply) or background (long task). Long tasks reply immediately and ping you when done. Use `/bg <task>` to force background mode manually.
 
 ### Multi-Bot Support
 
@@ -158,7 +141,7 @@ Optional periodic check-ins. Claude surfaces anything worth your attention on a 
 
 ### Built-in MCP Servers
 
-Fill in a token and goclaudeclaw generates `.mcp.json` in your workspace automatically — no manual setup. Claude picks it up on the next run.
+Fill in a token and claudeclaw generates `.mcp.json` in your workspace automatically — no manual setup. Claude picks it up on the next run.
 
 | Server | Token field | What it unlocks |
 |--------|-------------|-----------------|
@@ -273,6 +256,5 @@ No. Local memory via `memory.md` works out of the box. claude-mem adds cross-bot
 
 ## Related
 
-- [claudeclaw](https://github.com/lustan3216/claudeclaw) — original TypeScript/Bun implementation
 - [claude-mem](https://github.com/lustan3216/claude-mem) — shared memory server (MCP-compatible)
 - [Claude Code](https://docs.anthropic.com/claude-code) — the engine underneath

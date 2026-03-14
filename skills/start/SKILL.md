@@ -1,11 +1,11 @@
 ---
-name: goclaudeclaw:start
-description: Start the goclaudeclaw Telegram bot daemon
+name: claudeclaw:start
+description: Start the claudeclaw Telegram bot daemon
 ---
 
-Start the goclaudeclaw daemon which connects Claude Code to Telegram.
+Start the claudeclaw daemon which connects Claude Code to Telegram.
 
-Run: `goclaudeclaw start`
+Run: `claudeclaw start`
 
-If goclaudeclaw is not installed, run the install script first:
-`curl -fsSL https://raw.githubusercontent.com/lustan3216/goclaudeclaw/main/install.sh | sh`
+If claudeclaw is not installed, run the install script first:
+`curl -fsSL https://raw.githubusercontent.com/lustan3216/claudeclaw/main/install.sh | sh`

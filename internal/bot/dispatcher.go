@@ -22,10 +22,10 @@ import (
 
 	"github.com/mymmrac/telego"
 
-	"github.com/lustan3216/goclaudeclaw/internal/config"
-	"github.com/lustan3216/goclaudeclaw/internal/buildinfo"
-	"github.com/lustan3216/goclaudeclaw/internal/runner"
-	"github.com/lustan3216/goclaudeclaw/internal/session"
+	"github.com/lustan3216/claudeclaw/internal/config"
+	"github.com/lustan3216/claudeclaw/internal/buildinfo"
+	"github.com/lustan3216/claudeclaw/internal/runner"
+	"github.com/lustan3216/claudeclaw/internal/session"
 )
 
 // incomingMsg 是防抖窗口内收集的原始消息。
@@ -534,7 +534,7 @@ func (d *Dispatcher) triggerAutoUpdate() {
 		version = "dev"
 	}
 
-	ldflags := "-X github.com/lustan3216/goclaudeclaw/internal/buildinfo.Version=" + version
+	ldflags := "-X github.com/lustan3216/claudeclaw/internal/buildinfo.Version=" + version
 	buildCmd := exec.Command(gobin, "build", "-ldflags", ldflags, "-o", filepath.Join(d.workspace, "goclaudeclaw.new"), "./cmd/goclaudeclaw/")
 	buildCmd.Dir = d.workspace
 	buildCmd.Env = os.Environ()
@@ -866,7 +866,7 @@ func (d *Dispatcher) maybeUpdateMemory(ctx context.Context, chatID int64, topicI
 
 	slog.Info("触发记忆更新", "chat_id", chatID, "topic_id", topicID, "count", count)
 
-	prompt := "請根據以上對話，靜默更新工作目錄下的 .goclaudeclaw/memory.md 文件。\n" +
+	prompt := "請根據以上對話，靜默更新工作目錄下的 .claudeclaw/memory.md 文件。\n" +
 		"文件格式使用 section 標記，每個 section 包含雙語（中英文）tags，方便相關性匹配：\n\n" +
 		"<!-- section: global tags: always -->\n" +
 		"## 全局偏好\n" +
@@ -919,7 +919,7 @@ func (d *Dispatcher) maybeCompressMemory(ctx context.Context, chatID int64, topi
 
 	slog.Info("触发 memory.md 压缩", "count", count)
 
-	prompt := "請閱讀工作目錄下的 .goclaudeclaw/memory.md，" +
+	prompt := "請閱讀工作目錄下的 .claudeclaw/memory.md，" +
 		"去除重複內容、合并相似條目、刪除過時資訊，重新整理成簡潔的 Markdown。" +
 		"直接覆寫原文件，不需要回覆任何其他內容。"
 
@@ -965,7 +965,7 @@ func (d *Dispatcher) maybeSummarizeSession(ctx context.Context, chatID int64, to
 	slog.Info("触发对话摘要并重置 session", "chat_id", chatID, "topic_id", topicID, "count", count)
 
 	prompt := "請將以上完整對話整理成摘要，" +
-		"更新工作目錄下的 .goclaudeclaw/memory.md 文件的 '## 對話摘要' 部分，" +
+		"更新工作目錄下的 .claudeclaw/memory.md 文件的 '## 對話摘要' 部分，" +
 		"保留重要決策、用戶偏好和關鍵上下文。完成後不需要回覆任何其他內容。"
 
 	resultCh := make(chan runner.Result, 1)
@@ -1190,7 +1190,7 @@ func (d *Dispatcher) transcribeVoice(fileID string, chatID int64) (string, error
 }
 
 // downloadTelegramFile 通过 Telegram Bot API 下载文件，
-// 保存到 {workspace}/.goclaudeclaw/inbox/{chatID}/{filename}，
+// 保存到 {workspace}/.claudeclaw/inbox/{chatID}/{filename}，
 // 返回本地绝对路径。
 func (d *Dispatcher) downloadTelegramFile(fileID string, chatID int64, filename string) (string, error) {
 	// 第一步：向 Telegram 查询文件路径
@@ -1205,8 +1205,8 @@ func (d *Dispatcher) downloadTelegramFile(fileID string, chatID int64, filename 
 	// 构造下载 URL
 	downloadURL := fmt.Sprintf("https://api.telegram.org/file/bot%s/%s", d.botCfg.Token, file.FilePath)
 
-	// 第二步：创建目录 {workspace}/.goclaudeclaw/inbox/{chatID}/
-	inboxDir := filepath.Join(d.workspace, ".goclaudeclaw", "inbox", fmt.Sprintf("%d", chatID))
+	// 第二步：创建目录 {workspace}/.claudeclaw/inbox/{chatID}/
+	inboxDir := filepath.Join(d.workspace, ".claudeclaw", "inbox", fmt.Sprintf("%d", chatID))
 	if err := os.MkdirAll(inboxDir, 0o755); err != nil {
 		return "", fmt.Errorf("创建 inbox 目录失败: %w", err)
 	}
@@ -1252,7 +1252,7 @@ func (d *Dispatcher) downloadTelegramFile(fileID string, chatID int64, filename 
 
 // restartNotifyPath 返回重启通知文件路径。
 func (d *Dispatcher) restartNotifyPath() string {
-	return filepath.Join(d.workspace, ".goclaudeclaw", "restart_notify.json")
+	return filepath.Join(d.workspace, ".claudeclaw", "restart_notify.json")
 }
 
 // saveRestartNotify 在退出前保存通知目标，重启后发送 changelog。
@@ -1268,7 +1268,7 @@ func (d *Dispatcher) saveRestartNotify(chatID int64, topicID int) {
 		TopicID:   topicID,
 		OldCommit: strings.TrimSpace(string(out)),
 	})
-	_ = os.MkdirAll(filepath.Join(d.workspace, ".goclaudeclaw"), 0o755)
+	_ = os.MkdirAll(filepath.Join(d.workspace, ".claudeclaw"), 0o755)
 	_ = os.WriteFile(d.restartNotifyPath(), data, 0o644)
 }
 

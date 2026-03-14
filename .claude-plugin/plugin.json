@@ -1,12 +1,12 @@
 {
-  "name": "goclaudeclaw",
+  "name": "claudeclaw",
   "version": "0.1.0",
   "description": "Claude Code on your phone — Telegram bot with topics, multi-bot, auto subagent. Single Go binary.",
   "author": {
     "name": "lustan3216"
   },
-  "homepage": "https://github.com/lustan3216/goclaudeclaw",
-  "repository": "https://github.com/lustan3216/goclaudeclaw",
+  "homepage": "https://github.com/lustan3216/claudeclaw",
+  "repository": "https://github.com/lustan3216/claudeclaw",
   "license": "MIT",
   "keywords": ["telegram", "bot", "daemon", "claude-code", "multi-bot", "topics"]
 }

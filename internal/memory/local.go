@@ -9,7 +9,7 @@ import (
 )
 
 const (
-	localMemoryFile = ".goclaudeclaw/memory.md"
+	localMemoryFile = ".claudeclaw/memory.md"
 	maxMemoryBytes  = 2000 // 限制注入大小，避免 token 浪费
 )
 

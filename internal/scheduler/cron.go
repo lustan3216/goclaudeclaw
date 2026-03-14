@@ -9,8 +9,8 @@ import (
 
 	"github.com/robfig/cron/v3"
 
-	"github.com/lustan3216/goclaudeclaw/internal/config"
-	"github.com/lustan3216/goclaudeclaw/internal/runner"
+	"github.com/lustan3216/claudeclaw/internal/config"
+	"github.com/lustan3216/claudeclaw/internal/runner"
 )
 
 // CronScheduler 管理所有 cron 任务的生命周期。

@@ -1,8 +1,8 @@
 {
-  "name": "goclaudeclaw",
+  "name": "claudeclaw",
   "description": "Claude Code on your phone — Telegram bot with topics, multi-bot, auto subagent. Single Go binary.",
   "version": "0.1.0",
   "author": "lustan3216",
-  "repository": "https://github.com/lustan3216/goclaudeclaw",
-  "install": "curl -fsSL https://raw.githubusercontent.com/lustan3216/goclaudeclaw/main/install.sh | sh"
+  "repository": "https://github.com/lustan3216/claudeclaw",
+  "install": "curl -fsSL https://raw.githubusercontent.com/lustan3216/claudeclaw/main/install.sh | sh"
 }

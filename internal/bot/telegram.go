@@ -15,10 +15,10 @@ import (
 
 	"github.com/mymmrac/telego"
 
-	"github.com/lustan3216/goclaudeclaw/internal/buildinfo"
-	"github.com/lustan3216/goclaudeclaw/internal/config"
-	"github.com/lustan3216/goclaudeclaw/internal/runner"
-	"github.com/lustan3216/goclaudeclaw/internal/session"
+	"github.com/lustan3216/claudeclaw/internal/buildinfo"
+	"github.com/lustan3216/claudeclaw/internal/config"
+	"github.com/lustan3216/claudeclaw/internal/runner"
+	"github.com/lustan3216/claudeclaw/internal/session"
 )
 
 // Bot 封装单个 Telegram bot 的生命周期。

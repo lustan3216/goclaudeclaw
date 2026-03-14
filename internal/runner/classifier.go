@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/lustan3216/goclaudeclaw/internal/util"
+	"github.com/lustan3216/claudeclaw/internal/util"
 )
 
 // TaskMode 表示任务应以何种方式运行。

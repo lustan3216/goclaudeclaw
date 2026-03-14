@@ -13,7 +13,7 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/lustan3216/goclaudeclaw/internal/config"
+	"github.com/lustan3216/claudeclaw/internal/config"
 )
 
 // serverDef 单个 MCP 服务器的命令定义。

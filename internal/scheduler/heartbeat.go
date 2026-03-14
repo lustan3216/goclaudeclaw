@@ -9,9 +9,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/lustan3216/goclaudeclaw/internal/config"
-	"github.com/lustan3216/goclaudeclaw/internal/runner"
-	"github.com/lustan3216/goclaudeclaw/internal/util"
+	"github.com/lustan3216/claudeclaw/internal/config"
+	"github.com/lustan3216/claudeclaw/internal/runner"
+	"github.com/lustan3216/claudeclaw/internal/util"
 )
 
 // SendFn 是心跳结果的 Telegram 发送回调，由 bot 层注入。
@@ -116,10 +116,10 @@ func (h *Heartbeat) fire(ctx context.Context, t time.Time) {
 	}()
 }
 
-// buildPrompt 构建心跳 prompt：优先读 .goclaudeclaw/heartbeat.md，否则用配置中的 prompt。
+// buildPrompt 构建心跳 prompt：优先读 .claudeclaw/heartbeat.md，否则用配置中的 prompt。
 // heartbeat.md 是用户自定义的检查清单，agent 会评估每一项并决定是否需要通知。
 func (h *Heartbeat) buildPrompt() string {
-	checklistPath := filepath.Join(h.workspace, ".goclaudeclaw", "heartbeat.md")
+	checklistPath := filepath.Join(h.workspace, ".claudeclaw", "heartbeat.md")
 	if data, err := os.ReadFile(checklistPath); err == nil && len(data) > 0 {
 		return "請閱讀以下 heartbeat 清單，逐項評估。如果有需要通知的事項請直接說明；如果一切正常請只回覆 HEARTBEAT_OK，不要輸出其他內容。\n\n" +
 			string(data)

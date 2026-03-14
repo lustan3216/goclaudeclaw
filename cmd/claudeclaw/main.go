@@ -19,15 +19,15 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/lustan3216/goclaudeclaw/internal/bot"
-	"github.com/lustan3216/goclaudeclaw/internal/buildinfo"
-	"github.com/lustan3216/goclaudeclaw/internal/config"
-	"github.com/lustan3216/goclaudeclaw/internal/daemon"
-	"github.com/lustan3216/goclaudeclaw/internal/mcp"
-	"github.com/lustan3216/goclaudeclaw/internal/memory"
-	"github.com/lustan3216/goclaudeclaw/internal/runner"
-	"github.com/lustan3216/goclaudeclaw/internal/scheduler"
-	"github.com/lustan3216/goclaudeclaw/internal/session"
+	"github.com/lustan3216/claudeclaw/internal/bot"
+	"github.com/lustan3216/claudeclaw/internal/buildinfo"
+	"github.com/lustan3216/claudeclaw/internal/config"
+	"github.com/lustan3216/claudeclaw/internal/daemon"
+	"github.com/lustan3216/claudeclaw/internal/mcp"
+	"github.com/lustan3216/claudeclaw/internal/memory"
+	"github.com/lustan3216/claudeclaw/internal/runner"
+	"github.com/lustan3216/claudeclaw/internal/scheduler"
+	"github.com/lustan3216/claudeclaw/internal/session"
 )
 
 // version 在构建时通过 ldflags 注入到 buildinfo.Version。

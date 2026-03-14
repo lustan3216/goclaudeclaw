@@ -1,5 +1,5 @@
 {
-  "name": "goclaudeclaw",
+  "name": "claudeclaw",
   "version": "0.1.0",
   "description": "Claude Code on your phone — Telegram bot daemon with topics, multi-bot, auto subagent",
   "scripts": {

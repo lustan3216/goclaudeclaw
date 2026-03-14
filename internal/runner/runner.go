@@ -12,9 +12,9 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/lustan3216/goclaudeclaw/internal/config"
-	"github.com/lustan3216/goclaudeclaw/internal/memory"
-	"github.com/lustan3216/goclaudeclaw/internal/session"
+	"github.com/lustan3216/claudeclaw/internal/config"
+	"github.com/lustan3216/claudeclaw/internal/memory"
+	"github.com/lustan3216/claudeclaw/internal/session"
 )
 
 // Result 包含 claude 执行结果。

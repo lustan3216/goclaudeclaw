@@ -1,8 +1,8 @@
 ---
-name: goclaudeclaw:status
-description: Check goclaudeclaw daemon status
+name: claudeclaw:status
+description: Check claudeclaw daemon status
 ---
 
-Show status of the goclaudeclaw daemon, connected bots, and active sessions.
+Show status of the claudeclaw daemon, connected bots, and active sessions.
 
-Run: `goclaudeclaw status`
+Run: `claudeclaw status`

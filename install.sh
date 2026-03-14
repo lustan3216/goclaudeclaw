@@ -1,8 +1,8 @@
 #!/usr/bin/env sh
 set -e
 
-REPO="lustan3216/goclaudeclaw"
-BINARY="goclaudeclaw"
+REPO="lustan3216/claudeclaw"
+BINARY="claudeclaw"
 INSTALL_DIR="${INSTALL_DIR:-$HOME/.local/bin}"
 
 # detect OS and arch
@@ -36,9 +36,9 @@ echo ""
 echo "If ${INSTALL_DIR} is not in your PATH, add this to your shell config:"
 echo "  export PATH=\"\$PATH:${INSTALL_DIR}\""
 echo ""
-echo "Run: goclaudeclaw --help"
+echo "Run: claudeclaw --help"
 echo ""
 echo "Next steps:"
 echo "  1. Create config: mkdir -p ~/.goclaudeclaw && cp config.example.yaml ~/.goclaudeclaw/config.yaml"
 echo "  2. Edit config with your Telegram bot token"
-echo "  3. Run: goclaudeclaw start"
+echo "  3. Run: claudeclaw start"

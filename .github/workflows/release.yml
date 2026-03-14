@@ -20,13 +20,13 @@ jobs:
       - name: Build binaries
         run: |
           VERSION="${GITHUB_REF_NAME}"
-          LDFLAGS="-s -w -X github.com/lustan3216/goclaudeclaw/internal/buildinfo.Version=${VERSION}"
+          LDFLAGS="-s -w -X github.com/lustan3216/claudeclaw/internal/buildinfo.Version=${VERSION}"
           mkdir -p dist
 
           for GOOS in linux darwin; do
             for GOARCH in amd64 arm64; do
               OUT="dist/goclaudeclaw_${VERSION}_${GOOS}_${GOARCH}.tar.gz"
-              BINARY="goclaudeclaw"
+              BINARY="claudeclaw"
               CGO_ENABLED=0 GOOS=$GOOS GOARCH=$GOARCH go build -ldflags "$LDFLAGS" -o "$BINARY" ./cmd/goclaudeclaw/
               tar -czf "$OUT" "$BINARY"
               rm "$BINARY"

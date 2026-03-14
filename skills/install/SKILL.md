@@ -1,26 +1,26 @@
 ---
-name: goclaudeclaw:install
-description: Interactive setup wizard — download binary, configure bot, and start goclaudeclaw
+name: claudeclaw:install
+description: Interactive setup wizard — download binary, configure bot, and start claudeclaw
 ---
 
-Guide the user through installing and configuring goclaudeclaw step by step.
+Guide the user through installing and configuring claudeclaw step by step.
 
 ## Step 1 — Download binary
 
 Run the install script to download the pre-built binary:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/lustan3216/goclaudeclaw/main/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/lustan3216/claudeclaw/main/install.sh | sh
 ```
 
 If the user has Go installed, they can alternatively use:
 ```sh
-go install github.com/lustan3216/goclaudeclaw/cmd/goclaudeclaw@latest
+go install github.com/lustan3216/claudeclaw/cmd/claudeclaw@latest
 ```
 
 Verify installation:
 ```sh
-goclaudeclaw --version
+claudeclaw --version
 ```
 
 ## Step 2 — Create a Telegram bot
@@ -61,12 +61,12 @@ Then create `config.json` in the workspace:
 
 Option A — run directly:
 ```sh
-goclaudeclaw
+claudeclaw
 ```
 
 Option B — with watchdog (auto-restart + auto-update):
 ```sh
-curl -fsSL https://raw.githubusercontent.com/lustan3216/goclaudeclaw/main/run.sh -o run.sh
+curl -fsSL https://raw.githubusercontent.com/lustan3216/claudeclaw/main/run.sh -o run.sh
 chmod +x run.sh
 bash run.sh
 ```
