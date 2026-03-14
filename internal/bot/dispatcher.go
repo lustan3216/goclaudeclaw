@@ -53,6 +53,12 @@ type cancelEntry struct {
 // cancelEmojis 用户可通过对消息打以下 reaction 取消正在处理的任务。
 var cancelEmojis = map[string]bool{"😱": true, "😭": true}
 
+// httpClient 用于 Whisper API 调用，60s 超时。
+var httpClient = &http.Client{Timeout: 60 * time.Second}
+
+// downloadClient 用于 Telegram 文件下载，120s 超时。
+var downloadClient = &http.Client{Timeout: 120 * time.Second}
+
 // debounceState 跟踪每个 chat+topic 的防抖状态。
 type debounceState struct {
 	timer    *time.Timer
@@ -766,8 +772,8 @@ func (d *Dispatcher) dispatchJob(ctx context.Context, chatID int64, topicID int,
 			}
 			d.react(chatID, replyToID, "✅")
 			d.sendOutputTo(chatID, topicID, replyToID, result.Output)
-			d.maybeUpdateMemory(jobCtx, chatID, topicID)
-			d.maybeSummarizeSession(jobCtx, chatID, topicID)
+			d.maybeUpdateMemory(ctx, chatID, topicID)
+			d.maybeSummarizeSession(ctx, chatID, topicID)
 		}()
 		return
 	}
@@ -836,8 +842,8 @@ func (d *Dispatcher) dispatchJob(ctx context.Context, chatID int64, topicID int,
 	}
 	d.react(chatID, replyToID, "✅")
 	d.sendOutputTo(chatID, topicID, replyToID, result.Output)
-	d.maybeUpdateMemory(jobCtx, chatID, topicID)
-	d.maybeSummarizeSession(jobCtx, chatID, topicID)
+	d.maybeUpdateMemory(ctx, chatID, topicID)
+	d.maybeSummarizeSession(ctx, chatID, topicID)
 }
 
 // maybeUpdateMemory 在每 N 次成功完成后静默触发 memory.md 更新。
@@ -1017,61 +1023,6 @@ func (d *Dispatcher) sendOutputTo(chatID int64, topicID int, replyToID int, outp
 	}
 }
 
-// editOrReply 尝试编辑 thinkingMsgID；若无效或编辑失败则退回 replyTo。
-func (d *Dispatcher) editOrReply(chatID int64, topicID int, thinkingMsgID int, replyToID int, text string) {
-	if thinkingMsgID > 0 {
-		_, err := d.botAPI.EditMessageText(&telego.EditMessageTextParams{
-			ChatID:    telego.ChatID{ID: chatID},
-			MessageID: thinkingMsgID,
-			Text:      text,
-			ParseMode: telego.ModeMarkdown,
-		})
-		if err == nil {
-			return
-		}
-		// Markdown 解析失败时降级为纯文本重试
-		_, err = d.botAPI.EditMessageText(&telego.EditMessageTextParams{
-			ChatID:    telego.ChatID{ID: chatID},
-			MessageID: thinkingMsgID,
-			Text:      text,
-		})
-		if err == nil {
-			return
-		}
-		slog.Warn("编辑消息失败，退回 replyTo", "err", err, "chat_id", chatID)
-	}
-	d.replyTo(chatID, topicID, replyToID, text)
-}
-
-// sendOutputWithThinking 将结果写入思考占位消息：
-// 第一段 edit 进 thinkingMsgID，超长部分作为新消息继续发送。
-func (d *Dispatcher) sendOutputWithThinking(chatID int64, topicID int, thinkingMsgID int, replyToID int, output string) {
-	if output == "" {
-		d.editOrReply(chatID, topicID, thinkingMsgID, replyToID, "✓ 完成（无输出）")
-		return
-	}
-
-	const maxLen = 4000
-	runes := []rune(output)
-	first := true
-
-	for len(runes) > 0 {
-		chunk := runes
-		if len(chunk) > maxLen {
-			chunk = runes[:maxLen]
-			runes = runes[maxLen:]
-		} else {
-			runes = nil
-		}
-		if first {
-			d.editOrReply(chatID, topicID, thinkingMsgID, replyToID, string(chunk))
-			first = false
-		} else {
-			d.reply(chatID, topicID, string(chunk))
-		}
-	}
-}
-
 // replyTo 回复指定消息（quote），若 replyToID <= 0 则退化为普通发送。
 func (d *Dispatcher) replyTo(chatID int64, topicID int, replyToID int, text string) {
 	params := &telego.SendMessageParams{
@@ -1207,7 +1158,7 @@ func (d *Dispatcher) transcribeVoice(fileID string, chatID int64) (string, error
 	req.Header.Set("Authorization", "Bearer "+apiKey)
 	req.Header.Set("Content-Type", mw.FormDataContentType())
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := httpClient.Do(req)
 	if err != nil {
 		return "", fmt.Errorf("调用 Whisper API 失败: %w", err)
 	}
@@ -1269,7 +1220,7 @@ func (d *Dispatcher) downloadTelegramFile(fileID string, chatID int64, filename 
 	}
 
 	// 第三步：HTTP 下载文件内容
-	resp, err := http.Get(downloadURL) //nolint:noctx // 下载为一次性操作，无需 context
+	resp, err := downloadClient.Get(downloadURL)
 	if err != nil {
 		return "", fmt.Errorf("HTTP 下载失败: %w", err)
 	}

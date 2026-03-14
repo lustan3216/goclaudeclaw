@@ -11,6 +11,7 @@ import (
 
 	"github.com/lustan3216/goclaudeclaw/internal/config"
 	"github.com/lustan3216/goclaudeclaw/internal/runner"
+	"github.com/lustan3216/goclaudeclaw/internal/util"
 )
 
 // SendFn 是心跳结果的 Telegram 发送回调，由 bot 层注入。
@@ -24,7 +25,6 @@ type Heartbeat struct {
 	workspace string
 	loc       *time.Location
 	ticker    *time.Ticker
-	stopCh    chan struct{}
 	sendFn    SendFn // 结果发送回调，nil 表示仅记日志
 }
 
@@ -41,7 +41,6 @@ func NewHeartbeat(cfg *config.HeartbeatConfig, runnerMgr *runner.Manager, worksp
 		runnerMgr: runnerMgr,
 		workspace: workspace,
 		loc:       loc,
-		stopCh:    make(chan struct{}),
 		sendFn:    sendFn,
 	}, nil
 }
@@ -71,8 +70,6 @@ func (h *Heartbeat) Start(ctx context.Context) {
 		select {
 		case <-ctx.Done():
 			return
-		case <-h.stopCh:
-			return
 		case t := <-h.ticker.C:
 			localTime := t.In(h.loc)
 			if h.isQuietTime(localTime) {
@@ -84,11 +81,6 @@ func (h *Heartbeat) Start(ctx context.Context) {
 	}
 }
 
-// Stop 停止心跳调度器。
-func (h *Heartbeat) Stop() {
-	close(h.stopCh)
-}
-
 // fire 触发一次心跳：向 runner 提交 prompt 任务，并将结果发送到 Telegram。
 func (h *Heartbeat) fire(ctx context.Context, t time.Time) {
 	if h.sendFn == nil || h.cfg.ChatID == 0 {
@@ -98,7 +90,7 @@ func (h *Heartbeat) fire(ctx context.Context, t time.Time) {
 
 	prompt := h.buildPrompt()
 
-	slog.Info("触发心跳", "time", t.Format("15:04"), "chat_id", h.cfg.ChatID, "prompt_preview", truncate(prompt, 60))
+	slog.Info("触发心跳", "time", t.Format("15:04"), "chat_id", h.cfg.ChatID, "prompt_preview", util.Truncate(prompt, 60))
 
 	resultCh := make(chan runner.Result, 1)
 	h.runnerMgr.Submit(runner.Job{
@@ -178,11 +170,3 @@ func inWindow(current, start, end int) bool {
 	return current >= start || current < end
 }
 
-// truncate 截断字符串（复用 runner 包同名函数逻辑，避免循环依赖）。
-func truncate(s string, n int) string {
-	r := []rune(s)
-	if len(r) <= n {
-		return s
-	}
-	return string(r[:n]) + "..."
-}

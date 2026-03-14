@@ -8,7 +8,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
-	"os"
 	"os/exec"
 	"strings"
 	"sync"
@@ -58,7 +57,6 @@ type Manager struct {
 	mu         sync.Mutex
 	queues     map[queueKey]chan Job
 	sessions   *session.Manager
-	classifier *Classifier
 	cfg        *config.Config
 	claudePath string
 }
@@ -68,7 +66,6 @@ func NewManager(cfg *config.Config, sessions *session.Manager, claudePath string
 	return &Manager{
 		queues:     make(map[queueKey]chan Job),
 		sessions:   sessions,
-		classifier: NewClassifier(claudePath),
 		cfg:        cfg,
 		claudePath: claudePath,
 	}
@@ -163,13 +160,7 @@ func (m *Manager) execute(job Job) Result {
 	cmd.Dir = job.Workspace
 
 	// 过滤掉 CLAUDECODE 环境变量，避免 claude 拒绝嵌套启动
-	filtered := make([]string, 0, len(os.Environ()))
-	for _, e := range os.Environ() {
-		if !strings.HasPrefix(e, "CLAUDECODE=") {
-			filtered = append(filtered, e)
-		}
-	}
-	cmd.Env = filtered
+	cmd.Env = filteredEnv()
 
 	// 流式读取输出
 	stdout, err := cmd.StdoutPipe()

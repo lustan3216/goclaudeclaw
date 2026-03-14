@@ -5,10 +5,11 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"os"
 	"os/exec"
 	"strings"
 	"time"
+
+	"github.com/lustan3216/goclaudeclaw/internal/util"
 )
 
 // TaskMode 表示任务应以何种方式运行。
@@ -74,19 +75,13 @@ func (c *Classifier) Classify(ctx context.Context, message string) TaskMode {
 	)
 
 	// 过滤 CLAUDECODE 环境变量，避免 claude 拒绝嵌套启动
-	filtered := make([]string, 0, len(os.Environ()))
-	for _, e := range os.Environ() {
-		if !strings.HasPrefix(e, "CLAUDECODE=") {
-			filtered = append(filtered, e)
-		}
-	}
-	cmd.Env = filtered
+	cmd.Env = filteredEnv()
 
 	output, err := cmd.Output()
 	if err != nil {
 		slog.Warn("分类器调用失败，降级为前台模式",
 			"err", err,
-			"message_preview", truncate(message, 50))
+			"message_preview", util.Truncate(message, 50))
 		return ModeForeground
 	}
 
@@ -99,7 +94,7 @@ func (c *Classifier) Classify(ctx context.Context, message string) TaskMode {
 
 	slog.Debug("消息分类结果",
 		"result", result,
-		"message_preview", truncate(message, 50))
+		"message_preview", util.Truncate(message, 50))
 
 	if strings.Contains(result, "BACKGROUND") {
 		return ModeBackground
@@ -114,11 +109,3 @@ func buildClassifyPrompt(message string) string {
 	return fmt.Sprintf(classifyPromptTemplate, fmt.Sprintf("%q", message))
 }
 
-// truncate 截断字符串到指定长度，用于日志输出。
-func truncate(s string, n int) string {
-	r := []rune(s)
-	if len(r) <= n {
-		return s
-	}
-	return string(r[:n]) + "..."
-}

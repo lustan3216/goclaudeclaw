@@ -226,9 +226,13 @@ func (m *Manager) Set(keyOrAlias, value string) error {
 	return nil
 }
 
-// KnownAliases 返回所有支持的用户友好别名列表。
+// KnownAliases 返回所有支持的用户友好别名列表（副本，防止调用方意外修改内部映射）。
 func KnownAliases() map[string]string {
-	return keyAliases
+	out := make(map[string]string, len(keyAliases))
+	for k, v := range keyAliases {
+		out[k] = v
+	}
+	return out
 }
 
 // setDefaults 设置 viper 默认值，避免配置文件缺字段时 panic。
