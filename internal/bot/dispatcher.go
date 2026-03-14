@@ -44,6 +44,15 @@ type chatTopicKey struct {
 	topicID int
 }
 
+// cancelEntry 记录可通过 reaction 取消的任务信息。
+type cancelEntry struct {
+	cancel  context.CancelFunc
+	topicID int
+}
+
+// cancelEmojis 用户可通过对消息打以下 reaction 取消正在处理的任务。
+var cancelEmojis = map[string]bool{"😱": true, "😭": true}
+
 // debounceState 跟踪每个 chat+topic 的防抖状态。
 type debounceState struct {
 	timer    *time.Timer
@@ -63,6 +72,9 @@ type Dispatcher struct {
 
 	autoUpdateMu      sync.Mutex
 	autoUpdateRunning bool // 防止同时启动多个后台更新
+
+	cancelMu       sync.Mutex
+	cancelReactions map[int]cancelEntry // 触发消息 ID → 取消信息（用于 reaction 取消）
 
 	runnerMgr  *runner.Manager
 	sessionMgr *session.Manager
@@ -87,6 +99,7 @@ func NewDispatcher(
 	return &Dispatcher{
 		debounce:         make(map[chatTopicKey]*debounceState),
 		completionCounts: make(map[chatTopicKey]int),
+		cancelReactions:  make(map[int]cancelEntry),
 		runnerMgr:        runnerMgr,
 		sessionMgr:       sessionMgr,
 		classifier:       runner.NewClassifier("claude"),
@@ -108,6 +121,12 @@ func (d *Dispatcher) UpdateConfig(cfg *config.Config, botCfg config.BotConfig) {
 
 // Handle 接收来自 Telegram 的单条消息，进入防抖队列。
 func (d *Dispatcher) Handle(ctx context.Context, update telego.Update) {
+	// 处理 reaction 取消：用户对消息打 😱 或 😭 取消正在进行的任务
+	if update.MessageReaction != nil {
+		d.handleReactionCancel(update.MessageReaction)
+		return
+	}
+
 	if update.Message == nil {
 		return
 	}
@@ -318,7 +337,8 @@ func (d *Dispatcher) handleCommand(ctx context.Context, msg *telego.Message, top
 				"`/clear`          清除 session，重载 MCP\n"+
 				"`/bg <任务>`      强制后台模式，长任务不堵对话\n"+
 				"`/status`         查看运行状态\n"+
-				"`/usage`          今日 token 用量统计\n\n"+
+				"`/usage`          今日 token 用量统计\n"+
+				"😱 或 😭           对正在处理的消息打此 reaction 可取消任务\n\n"+
 				"*🔄 更新*\n"+
 				"`/update`         立即重启并拉取最新版本\n\n"+
 				"*⚙️ MCP 配置*\n"+
@@ -703,13 +723,25 @@ func (d *Dispatcher) dispatchJob(ctx context.Context, chatID int64, topicID int,
 	// 收到訊息先打 👀
 	d.react(chatID, replyToID, "👀")
 
+	// 创建独立 cancel，注册到 cancelReactions 支持 reaction 取消（😱/😭）
+	jobCtx, jobCancel := context.WithCancel(ctx)
+	d.cancelMu.Lock()
+	d.cancelReactions[replyToID] = cancelEntry{cancel: jobCancel, topicID: topicID}
+	d.cancelMu.Unlock()
+	cleanup := func() {
+		d.cancelMu.Lock()
+		delete(d.cancelReactions, replyToID)
+		d.cancelMu.Unlock()
+		jobCancel()
+	}
+
 	// 后台任务：立即回复用户，异步执行
 	if mode == runner.ModeBackground {
 		d.replyTo(chatID, topicID, replyToID, "⏳ 已在后台处理，完成后通知你。")
 
 		resultCh := make(chan runner.Result, 1)
 		d.runnerMgr.Submit(runner.Job{
-			Ctx:       ctx,
+			Ctx:       jobCtx,
 			Workspace: d.workspace,
 			BotName:   d.botCfg.Name,
 			ChatID:    chatID,
@@ -720,15 +752,19 @@ func (d *Dispatcher) dispatchJob(ctx context.Context, chatID int64, topicID int,
 		})
 
 		go func() {
+			defer cleanup()
 			result := <-resultCh
 			if result.Err != nil {
+				if jobCtx.Err() != nil {
+					return // 已由 reaction 取消，reply 由 handleReactionCancel 发送
+				}
 				d.replyTo(chatID, topicID, replyToID, fmt.Sprintf("❌ 后台任务失败: %v", result.Err))
 				return
 			}
 			d.react(chatID, replyToID, "✅")
 			d.sendOutputTo(chatID, topicID, replyToID, result.Output)
-			d.maybeUpdateMemory(ctx, chatID, topicID)
-			d.maybeSummarizeSession(ctx, chatID, topicID)
+			d.maybeUpdateMemory(jobCtx, chatID, topicID)
+			d.maybeSummarizeSession(jobCtx, chatID, topicID)
 		}()
 		return
 	}
@@ -748,7 +784,7 @@ func (d *Dispatcher) dispatchJob(ctx context.Context, chatID int64, topicID int,
 
 	resultCh := make(chan runner.Result, 1)
 	d.runnerMgr.Submit(runner.Job{
-		Ctx:       ctx,
+		Ctx:       jobCtx,
 		Workspace: d.workspace,
 		BotName:   d.botCfg.Name,
 		ChatID:    chatID,
@@ -767,6 +803,8 @@ func (d *Dispatcher) dispatchJob(ctx context.Context, chatID int64, topicID int,
 			select {
 			case <-typingDone:
 				return
+			case <-jobCtx.Done():
+				return
 			case <-ticker.C:
 				params := &telego.SendChatActionParams{
 					ChatID: telego.ChatID{ID: chatID},
@@ -784,15 +822,19 @@ func (d *Dispatcher) dispatchJob(ctx context.Context, chatID int64, topicID int,
 
 	result := <-resultCh
 	close(typingDone)
+	cleanup()
 
+	if jobCtx.Err() != nil {
+		return // 已由 reaction 取消，reply 由 handleReactionCancel 发送
+	}
 	if result.Err != nil {
 		d.replyTo(chatID, topicID, replyToID, fmt.Sprintf("❌ 执行失败: %v", result.Err))
 		return
 	}
 	d.react(chatID, replyToID, "✅")
 	d.sendOutputTo(chatID, topicID, replyToID, result.Output)
-	d.maybeUpdateMemory(ctx, chatID, topicID)
-	d.maybeSummarizeSession(ctx, chatID, topicID)
+	d.maybeUpdateMemory(jobCtx, chatID, topicID)
+	d.maybeSummarizeSession(jobCtx, chatID, topicID)
 }
 
 // maybeUpdateMemory 在每 N 次成功完成后静默触发 memory.md 更新。
@@ -1053,6 +1095,34 @@ func (d *Dispatcher) replyTo(chatID int64, topicID int, replyToID int, text stri
 // reply 向指定 chat（可选 topic）发送文本消息，不 quote 任何消息。
 func (d *Dispatcher) reply(chatID int64, topicID int, text string) {
 	d.replyTo(chatID, topicID, 0, text)
+}
+
+// handleReactionCancel 检查用户新增的 reaction：若为取消 emoji（😱/😭），则取消对应任务。
+func (d *Dispatcher) handleReactionCancel(r *telego.MessageReactionUpdated) {
+	for _, reaction := range r.NewReaction {
+		emoji, ok := reaction.(*telego.ReactionTypeEmoji)
+		if !ok || !cancelEmojis[emoji.Emoji] {
+			continue
+		}
+		d.cancelMu.Lock()
+		entry, found := d.cancelReactions[r.MessageID]
+		if found {
+			delete(d.cancelReactions, r.MessageID)
+		}
+		d.cancelMu.Unlock()
+
+		if found {
+			entry.cancel()
+			// 移除 👀，换成 🛑 表示已取消
+			_ = d.botAPI.SetMessageReaction(&telego.SetMessageReactionParams{
+				ChatID:    telego.ChatID{ID: r.Chat.ID},
+				MessageID: r.MessageID,
+				Reaction:  []telego.ReactionType{},
+			})
+			d.reply(r.Chat.ID, entry.topicID, "🛑 已取消")
+		}
+		return
+	}
 }
 
 // react 给指定消息打表情 reaction，出错只记日志不影响主流程。

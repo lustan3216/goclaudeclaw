@@ -90,7 +90,9 @@ func (b *Bot) UpdateConfig(cfg *config.Config) {
 func (b *Bot) Run(ctx context.Context) {
 	slog.Info("启动 bot 长轮询", "bot", b.cfg.Name)
 
-	updates, err := b.api.UpdatesViaLongPolling(nil,
+	updates, err := b.api.UpdatesViaLongPolling(
+		// 显式指定 message_reaction（默认不包含，需明确声明）
+		(&telego.GetUpdatesParams{}).WithAllowedUpdates("message", "message_reaction"),
 		telego.WithLongPollingContext(ctx),
 		telego.WithLongPollingRetryTimeout(3*time.Second),
 	)
