@@ -17,6 +17,16 @@ import (
 	"github.com/lustan3216/claudeclaw/internal/session"
 )
 
+// TaskMode indicates how a task should be run.
+type TaskMode int
+
+const (
+	// ModeForeground streams output and replies to Telegram after completion.
+	ModeForeground TaskMode = iota
+	// ModeBackground runs in an independent goroutine and immediately notifies the user.
+	ModeBackground
+)
+
 // Result holds the claude execution result.
 type Result struct {
 	Output      string

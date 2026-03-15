@@ -83,7 +83,6 @@ type Dispatcher struct {
 
 	runnerMgr  *runner.Manager
 	sessionMgr *session.Manager
-	classifier *runner.Classifier
 	cfg        *config.Config
 	cfgMgr     *config.Manager
 	botCfg     config.BotConfig
@@ -107,7 +106,6 @@ func NewDispatcher(
 		topicPending:     make(map[chatTopicKey]*topicQueue),
 		runnerMgr:        runnerMgr,
 		sessionMgr:       sessionMgr,
-		classifier:       runner.NewClassifier("claude"),
 		cfg:              cfg,
 		cfgMgr:           cfgMgr,
 		botCfg:           botCfg,
@@ -208,10 +206,7 @@ func (d *Dispatcher) Handle(ctx context.Context, update telego.Update) {
 			return
 		}
 		text := "[Voice transcription]: " + voiceText
-		go func() {
-			mode := d.classifier.Classify(ctx, text)
-			d.submitOrQueue(ctx, msg.Chat.ID, topicID, msg.MessageID, text, mode)
-		}()
+		d.submitOrQueue(ctx, msg.Chat.ID, topicID, msg.MessageID, text, runner.ModeForeground)
 		return
 	}
 
@@ -244,10 +239,7 @@ func (d *Dispatcher) Handle(ctx context.Context, update telego.Update) {
 		if caption != "" {
 			text += "\n" + caption
 		}
-		go func() {
-			mode := d.classifier.Classify(ctx, text)
-			d.submitOrQueue(ctx, msg.Chat.ID, topicID, msg.MessageID, text, mode)
-		}()
+		d.submitOrQueue(ctx, msg.Chat.ID, topicID, msg.MessageID, text, runner.ModeForeground)
 		return
 	}
 
@@ -278,10 +270,7 @@ func (d *Dispatcher) Handle(ctx context.Context, update telego.Update) {
 		if caption != "" {
 			text += "\n" + caption
 		}
-		go func() {
-			mode := d.classifier.Classify(ctx, text)
-			d.submitOrQueue(ctx, msg.Chat.ID, topicID, msg.MessageID, text, mode)
-		}()
+		d.submitOrQueue(ctx, msg.Chat.ID, topicID, msg.MessageID, text, runner.ModeForeground)
 		return
 	}
 
@@ -290,10 +279,7 @@ func (d *Dispatcher) Handle(ctx context.Context, update telego.Update) {
 		return
 	}
 
-	go func() {
-		mode := d.classifier.Classify(ctx, text)
-		d.submitOrQueue(ctx, msg.Chat.ID, topicID, msg.MessageID, text, mode)
-	}()
+	d.submitOrQueue(ctx, msg.Chat.ID, topicID, msg.MessageID, text, runner.ModeForeground)
 }
 
 // parseCommand detects whether a message is a bot command.
