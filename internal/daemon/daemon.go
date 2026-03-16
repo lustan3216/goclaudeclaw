@@ -103,16 +103,77 @@ func WaitForShutdown(cancel context.CancelFunc) os.Signal {
 	return sig
 }
 
-// SetupLogger initializes structured logging (slog), choosing the level based on the debug flag.
-func SetupLogger(debug bool) {
+// multiHandler fans out a single slog record to multiple handlers.
+type multiHandler struct{ handlers []slog.Handler }
+
+func (m *multiHandler) Enabled(ctx context.Context, level slog.Level) bool {
+	for _, h := range m.handlers {
+		if h.Enabled(ctx, level) {
+			return true
+		}
+	}
+	return false
+}
+func (m *multiHandler) Handle(ctx context.Context, r slog.Record) error {
+	for _, h := range m.handlers {
+		_ = h.Handle(ctx, r)
+	}
+	return nil
+}
+func (m *multiHandler) WithAttrs(attrs []slog.Attr) slog.Handler {
+	next := make([]slog.Handler, len(m.handlers))
+	for i, h := range m.handlers {
+		next[i] = h.WithAttrs(attrs)
+	}
+	return &multiHandler{next}
+}
+func (m *multiHandler) WithGroup(name string) slog.Handler {
+	next := make([]slog.Handler, len(m.handlers))
+	for i, h := range m.handlers {
+		next[i] = h.WithGroup(name)
+	}
+	return &multiHandler{next}
+}
+
+// SetupLogger initializes structured logging (slog).
+// If logFile is non-empty, logs are tee'd to both stderr and the file (append mode).
+func SetupLogger(debug bool, logFile string) {
 	level := slog.LevelInfo
 	if debug {
 		level = slog.LevelDebug
 	}
-
-	handler := slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{
+	opts := &slog.HandlerOptions{
 		Level:     level,
-		AddSource: debug, // include source location in debug mode
-	})
+		AddSource: debug,
+	}
+
+	handlers := []slog.Handler{slog.NewTextHandler(os.Stderr, opts)}
+
+	if logFile != "" {
+		if err := os.MkdirAll(filepath.Dir(logFile), 0o755); err == nil {
+			if f, err := os.OpenFile(logFile, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644); err == nil {
+				handlers = append(handlers, slog.NewTextHandler(f, opts))
+			}
+		}
+	}
+
+	var handler slog.Handler
+	if len(handlers) == 1 {
+		handler = handlers[0]
+	} else {
+		handler = &multiHandler{handlers}
+	}
 	slog.SetDefault(slog.New(handler))
+}
+
+// RecoverAndLog catches any panic, logs it via slog (which tees to the log file if configured),
+// then re-panics so the Go runtime prints the full stack trace to stderr.
+// Intended to be deferred at the top of main().
+func RecoverAndLog() {
+	r := recover()
+	if r == nil {
+		return
+	}
+	slog.Error("unrecovered panic", "panic", fmt.Sprintf("%v", r))
+	panic(r) // re-panic to get full stack trace on stderr
 }

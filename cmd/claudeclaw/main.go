@@ -33,6 +33,7 @@ import (
 var version = buildinfo.Version
 
 func main() {
+	defer daemon.RecoverAndLog()
 	if err := newRootCmd().Execute(); err != nil {
 		os.Exit(1)
 	}
@@ -42,6 +43,7 @@ func main() {
 type cliFlags struct {
 	configPath string
 	pidFile    string
+	logFile    string
 	claudePath string
 	debug      bool
 	forceSetup bool
@@ -62,6 +64,7 @@ func newRootCmd() *cobra.Command {
 
 	root.PersistentFlags().StringVarP(&flags.configPath, "config", "c", "config.json", "path to config file")
 	root.PersistentFlags().StringVar(&flags.pidFile, "pid-file", "", "path to PID file (omit to disable)")
+	root.PersistentFlags().StringVar(&flags.logFile, "log-file", "", "path to log file; logs are tee'd to stderr AND this file (append)")
 	root.PersistentFlags().StringVar(&flags.claudePath, "claude", "claude", "path to claude binary")
 	root.PersistentFlags().BoolVar(&flags.debug, "debug", false, "enable debug logging")
 	root.PersistentFlags().BoolVar(&flags.forceSetup, "setup", false, "run interactive setup wizard")
@@ -75,7 +78,7 @@ func newRootCmd() *cobra.Command {
 
 // run is the daemon's main entry point: initializes all components, starts services, waits for signals.
 func run(flags *cliFlags) error {
-	daemon.SetupLogger(flags.debug)
+	daemon.SetupLogger(flags.debug, flags.logFile)
 
 	// Run setup wizard on first launch (no config) or when --setup is passed.
 	if flags.forceSetup || setup.NeedsSetup(flags.configPath) {
