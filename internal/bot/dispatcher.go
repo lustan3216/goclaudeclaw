@@ -481,19 +481,21 @@ func (d *Dispatcher) triggerAutoUpdate() {
 		d.autoUpdateMu.Unlock()
 	}()
 
+	repo := repoDir()
+
 	// Check if remote has new commits (no pull, just fetch one commit)
-	fetchCmd := exec.Command("git", "-C", d.workspace, "fetch", "origin", "main", "--depth=1")
+	fetchCmd := exec.Command("git", "-C", repo, "fetch", "origin", "main", "--depth=1")
 	fetchCmd.Env = os.Environ()
 	if err := fetchCmd.Run(); err != nil {
 		return
 	}
 
-	localCmd := exec.Command("git", "-C", d.workspace, "rev-parse", "HEAD")
+	localCmd := exec.Command("git", "-C", repo, "rev-parse", "HEAD")
 	localOut, err := localCmd.Output()
 	if err != nil {
 		return
 	}
-	remoteCmd := exec.Command("git", "-C", d.workspace, "rev-parse", "origin/main")
+	remoteCmd := exec.Command("git", "-C", repo, "rev-parse", "origin/main")
 	remoteOut, err := remoteCmd.Output()
 	if err != nil {
 		return
@@ -508,7 +510,7 @@ func (d *Dispatcher) triggerAutoUpdate() {
 	// New version available, pull and build
 	slog.Info("auto_update: new version detected, building in background", "local", local[:8], "remote", remote[:8])
 
-	pullCmd := exec.Command("git", "-C", d.workspace, "pull", "origin", "main")
+	pullCmd := exec.Command("git", "-C", repo, "pull", "origin", "main")
 	pullCmd.Env = os.Environ()
 	if err := pullCmd.Run(); err != nil {
 		slog.Warn("auto_update: git pull failed", "err", err)
@@ -519,7 +521,7 @@ func (d *Dispatcher) triggerAutoUpdate() {
 	if gobin == "" {
 		gobin = "/data/go/go/bin/go"
 	}
-	versionCmd := exec.Command("git", "-C", d.workspace, "describe", "--tags", "--always")
+	versionCmd := exec.Command("git", "-C", repo, "describe", "--tags", "--always")
 	versionOut, _ := versionCmd.Output()
 	version := strings.TrimSpace(string(versionOut))
 	if version == "" {
@@ -527,22 +529,38 @@ func (d *Dispatcher) triggerAutoUpdate() {
 	}
 
 	ldflags := "-X github.com/lustan3216/claudeclaw/internal/buildinfo.Version=" + version
-	buildCmd := exec.Command(gobin, "build", "-ldflags", ldflags, "-o", filepath.Join(d.workspace, "claudeclaw.new"), "./cmd/claudeclaw/")
-	buildCmd.Dir = d.workspace
+	buildCmd := exec.Command(gobin, "build", "-ldflags", ldflags, "-o", filepath.Join(repo, "claudeclaw.new"), "./cmd/claudeclaw/")
+	buildCmd.Dir = repo
 	buildCmd.Env = os.Environ()
 	if err := buildCmd.Run(); err != nil {
 		slog.Warn("auto_update: build failed", "err", err)
-		_ = os.Remove(filepath.Join(d.workspace, "claudeclaw.new"))
+		_ = os.Remove(filepath.Join(repo, "claudeclaw.new"))
 		return
 	}
 	slog.Info("auto_update: new version ready, will take effect on next restart", "version", version)
 }
 
+// repoDir returns the directory containing the running binary (i.e. the git repo root).
+// This is NOT necessarily d.workspace — the binary may live in a subdirectory.
+func repoDir() string {
+	exe, err := os.Executable()
+	if err != nil {
+		return "."
+	}
+	real, err := filepath.EvalSymlinks(exe)
+	if err != nil {
+		return filepath.Dir(exe)
+	}
+	return filepath.Dir(real)
+}
+
 // selfUpdate pulls latest code, rebuilds the binary, swaps it, and re-execs the process.
 // No run.sh watchdog needed — the binary restarts itself.
 func (d *Dispatcher) selfUpdate(chatID int64, topicID int) {
+	repo := repoDir()
+
 	// 1. git pull
-	pullCmd := exec.Command("git", "-C", d.workspace, "pull", "origin", "main")
+	pullCmd := exec.Command("git", "-C", repo, "pull", "origin", "main")
 	pullCmd.Env = os.Environ()
 	if out, err := pullCmd.CombinedOutput(); err != nil {
 		d.reply(chatID, topicID, fmt.Sprintf("❌ git pull failed: %s", strings.TrimSpace(string(out))))
@@ -554,16 +572,16 @@ func (d *Dispatcher) selfUpdate(chatID int64, topicID int) {
 	if gobin == "" {
 		gobin = "/data/go/go/bin/go"
 	}
-	versionOut, _ := exec.Command("git", "-C", d.workspace, "describe", "--tags", "--always").Output()
+	versionOut, _ := exec.Command("git", "-C", repo, "describe", "--tags", "--always").Output()
 	version := strings.TrimSpace(string(versionOut))
 	if version == "" {
 		version = "dev"
 	}
 
-	newBin := filepath.Join(d.workspace, "claudeclaw.new")
+	newBin := filepath.Join(repo, "claudeclaw.new")
 	ldflags := "-X github.com/lustan3216/claudeclaw/internal/buildinfo.Version=" + version
 	buildCmd := exec.Command(gobin, "build", "-ldflags", ldflags, "-o", newBin, "./cmd/claudeclaw/")
-	buildCmd.Dir = d.workspace
+	buildCmd.Dir = repo
 	buildCmd.Env = os.Environ()
 	if out, err := buildCmd.CombinedOutput(); err != nil {
 		d.reply(chatID, topicID, fmt.Sprintf("❌ Build failed: %s", strings.TrimSpace(string(out))))
@@ -572,7 +590,7 @@ func (d *Dispatcher) selfUpdate(chatID int64, topicID int) {
 	}
 
 	// 3. swap binary
-	currentBin := filepath.Join(d.workspace, "claudeclaw")
+	currentBin := filepath.Join(repo, "claudeclaw")
 	if err := os.Rename(newBin, currentBin); err != nil {
 		d.reply(chatID, topicID, fmt.Sprintf("❌ Binary swap failed: %v", err))
 		return
@@ -581,7 +599,7 @@ func (d *Dispatcher) selfUpdate(chatID int64, topicID int) {
 	// 4. save restart notification so the new process sends changelog
 	d.saveRestartNotify(chatID, topicID)
 
-	slog.Info("selfUpdate: re-execing", "version", version)
+	slog.Info("selfUpdate: re-execing", "version", version, "repo", repo)
 
 	// 5. re-exec: replace current process with the new binary
 	if err := syscall.Exec(currentBin, os.Args, os.Environ()); err != nil {
@@ -1539,7 +1557,7 @@ func (d *Dispatcher) saveRestartNotify(chatID int64, topicID int) {
 		TopicID   int    `json:"topic_id"`
 		OldCommit string `json:"old_commit"`
 	}
-	out, _ := exec.Command("git", "-C", d.workspace, "rev-parse", "--short", "HEAD").Output()
+	out, _ := exec.Command("git", "-C", repoDir(), "rev-parse", "--short", "HEAD").Output()
 	data, _ := json.Marshal(notifData{
 		ChatID:    chatID,
 		TopicID:   topicID,

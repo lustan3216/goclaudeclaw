@@ -112,7 +112,7 @@ func (b *Bot) sendRestartNotification() {
 	// Generate changelog (list of new commits)
 	var changelogPart string
 	if notif.OldCommit != "" {
-		out, err := exec.Command("git", "-C", b.dispatcher.workspace,
+		out, err := exec.Command("git", "-C", repoDir(),
 			"log", notif.OldCommit+"..HEAD", "--oneline").Output()
 		if err == nil && len(strings.TrimSpace(string(out))) > 0 {
 			changelogPart = "\n\n*What's new*\n```\n" + strings.TrimSpace(string(out)) + "\n```"
