@@ -932,21 +932,36 @@ func (d *Dispatcher) dispatchJob(ctx context.Context, chatID int64, topicID int,
 		}
 	}()
 
-	// notify user after 20s, then every 60s
+	// notify user after 20s; edit the same message on each 60s tick to avoid spam
 	taskStart := time.Now()
 	longTaskDone := make(chan struct{})
+	var notifMsgID atomic.Int64 // stores the status message ID once sent (0 = not yet sent)
 	go func() {
+		buildText := func(elapsed int) string {
+			var msg string
+			if elapsed > 0 {
+				msg = fmt.Sprintf("⏳ %s — still running (%ds)", title, elapsed)
+			} else {
+				msg = fmt.Sprintf("⏳ %s — still running...", title)
+			}
+			if p := lastActivity.Load(); p != nil && *p != "" {
+				msg += fmt.Sprintf("\nLast action: %s", truncateActivity(*p))
+			}
+			return msg
+		}
 		select {
 		case <-longTaskDone:
 			return
 		case <-jobCtx.Done():
 			return
 		case <-time.After(20 * time.Second):
-			msg := fmt.Sprintf("⏳ %s — still running...", title)
-			if p := lastActivity.Load(); p != nil && *p != "" {
-				msg += fmt.Sprintf("\nLast action: %s", truncateActivity(*p))
+			msgID := d.replyToWithButton(chatID, topicID, 0, buildText(0), "📋 View progress", "bg_progress")
+			if msgID > 0 {
+				notifMsgID.Store(int64(msgID))
+				d.progressMu.Lock()
+				d.progressCallbacks[msgID] = lastActivity
+				d.progressMu.Unlock()
 			}
-			d.replyTo(chatID, topicID, 0, msg)
 		}
 		ticker := time.NewTicker(60 * time.Second)
 		defer ticker.Stop()
@@ -958,11 +973,13 @@ func (d *Dispatcher) dispatchJob(ctx context.Context, chatID int64, topicID int,
 				return
 			case <-ticker.C:
 				elapsed := int(time.Since(taskStart).Seconds())
-				msg := fmt.Sprintf("⏳ %s — still running (%ds)", title, elapsed)
-				if p := lastActivity.Load(); p != nil && *p != "" {
-					msg += fmt.Sprintf("\nLast action: %s", truncateActivity(*p))
+				text := buildText(elapsed)
+				if mid := int(notifMsgID.Load()); mid > 0 {
+					// Edit in-place instead of sending a new message
+					d.editMessageWithButton(chatID, mid, text, "📋 View progress", "bg_progress")
+				} else {
+					d.replyTo(chatID, topicID, 0, text)
 				}
-				d.replyTo(chatID, topicID, 0, msg)
 			}
 		}
 	}()
@@ -970,6 +987,14 @@ func (d *Dispatcher) dispatchJob(ctx context.Context, chatID int64, topicID int,
 	result := <-resultCh
 	close(longTaskDone)
 	close(typingDone)
+
+	// Clean up the long-task notification message if one was sent
+	if mid := int(notifMsgID.Load()); mid > 0 {
+		d.progressMu.Lock()
+		delete(d.progressCallbacks, mid)
+		d.progressMu.Unlock()
+		d.removeInlineKeyboard(chatID, topicID, mid)
+	}
 
 	// Check cancellation BEFORE calling cleanup (which itself calls jobCancel).
 	// If already cancelled (user reacted with 😱/😭), handleReactionCancel already sent a reply.
@@ -1537,6 +1562,22 @@ func (d *Dispatcher) replyToWithButton(chatID int64, topicID, replyToID int, tex
 		return 0
 	}
 	return sent.MessageID
+}
+
+// editMessageWithButton edits an existing message's text while keeping a single inline button.
+func (d *Dispatcher) editMessageWithButton(chatID int64, messageID int, text, buttonLabel, callbackData string) {
+	if _, err := d.botAPI.EditMessageText(&telego.EditMessageTextParams{
+		ChatID:    telego.ChatID{ID: chatID},
+		MessageID: messageID,
+		Text:      text,
+		ReplyMarkup: &telego.InlineKeyboardMarkup{
+			InlineKeyboard: [][]telego.InlineKeyboardButton{
+				{{Text: buttonLabel, CallbackData: callbackData}},
+			},
+		},
+	}); err != nil {
+		slog.Debug("editMessageWithButton: edit failed", "err", err)
+	}
 }
 
 // removeInlineKeyboard edits a message to strip its inline keyboard.
