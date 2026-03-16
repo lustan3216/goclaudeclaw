@@ -58,11 +58,12 @@ type topicQueue struct {
 // cancelEmojis — users can cancel an in-progress task by reacting with one of these emojis.
 var cancelEmojis = map[string]bool{"😱": true, "😭": true}
 
-// subagentInfo holds state for a single subagent within a job.
-type subagentInfo struct {
+// toolActivity tracks a single tool call's state for display.
+type toolActivity struct {
 	toolUseID    string
-	description  string
-	subagentType string
+	toolName     string // "Agent", "Read", "Bash", etc.
+	summary      string // human-readable summary
+	subagentType string // only for Agent
 	done         bool
 }
 
@@ -821,46 +822,46 @@ func (d *Dispatcher) dispatchJob(ctx context.Context, chatID int64, topicID int,
 		jobCancel()
 	}
 
-	// Create agent event channel for subagent visibility
-	agentEventCh := make(chan runner.AgentEvent, 16)
+	// Create tool event channel for real-time progress visibility
+	toolEventCh := make(chan runner.ToolEvent, 32)
 
-	// For background jobs, send status message upfront; for foreground, send on first subagent event
+	// For background jobs, send status message upfront; for foreground, send on first tool event
 	var statusMsgID int
 	if mode == runner.ModeBackground {
 		statusMsgID = d.replyTo(chatID, topicID, replyToID, "⏳ Processing in the background...")
 	}
 
-	// Start agent event listener goroutine — edits the status message with subagent progress
+	// Start tool event listener goroutine — edits the status message with live progress
 	agentDone := make(chan struct{})
 	go func() {
 		defer close(agentDone)
-		var agents []subagentInfo
-		for evt := range agentEventCh {
-			agentType := evt.SubagentType
-			if agentType == "" {
-				agentType = "general"
-			}
+		var activities []toolActivity
+		var lastText string
+		for evt := range toolEventCh {
 			switch evt.Type {
-			case runner.AgentStarted:
-				agents = append(agents, subagentInfo{
+			case runner.ToolStarted:
+				activities = append(activities, toolActivity{
 					toolUseID:    evt.ToolUseID,
-					description:  evt.Description,
-					subagentType: agentType,
+					toolName:     evt.ToolName,
+					summary:      evt.Summary,
+					subagentType: evt.SubagentType,
 				})
-				slog.Info("subagent started", "description", evt.Description, "type", agentType, "tool_use_id", evt.ToolUseID)
-			case runner.AgentCompleted:
-				for i := range agents {
-					if agents[i].toolUseID == evt.ToolUseID {
-						agents[i].done = true
+			case runner.ToolCompleted:
+				for i := range activities {
+					if activities[i].toolUseID == evt.ToolUseID {
+						activities[i].done = true
 						break
 					}
 				}
-				slog.Info("subagent completed", "tool_use_id", evt.ToolUseID)
 			}
-			// 构建子代理状态文本
-			text := d.buildAgentStatusText(agents, mode == runner.ModeBackground)
+			// 构建进度文本
+			text := d.buildProgressText(activities, mode == runner.ModeBackground)
+			if text == lastText {
+				continue // 避免重复编辑相同内容
+			}
+			lastText = text
 			if statusMsgID == 0 {
-				// 前台任务：首次子代理事件时发送新消息
+				// 前台任务：首次工具事件时发送新消息
 				statusMsgID = d.replyTo(chatID, topicID, replyToID, text)
 			} else {
 				// 编辑已有的状态消息
@@ -871,7 +872,7 @@ func (d *Dispatcher) dispatchJob(ctx context.Context, chatID int64, topicID int,
 					ParseMode: telego.ModeMarkdown,
 				})
 				if err != nil {
-					slog.Warn("failed to edit agent status message", "err", err, "msg_id", statusMsgID)
+					slog.Warn("failed to edit progress message", "err", err, "msg_id", statusMsgID)
 				}
 			}
 		}
@@ -893,7 +894,7 @@ func (d *Dispatcher) dispatchJob(ctx context.Context, chatID int64, topicID int,
 			ClaudeCredentials: d.botCfg.ClaudeCredentials,
 			Model:             d.botCfg.Model,
 			ResultCh:          resultCh,
-			AgentEventCh:      agentEventCh,
+			ToolEventCh:       toolEventCh,
 		})
 
 		go func() {
@@ -960,7 +961,7 @@ func (d *Dispatcher) dispatchJob(ctx context.Context, chatID int64, topicID int,
 		ClaudeCredentials: d.botCfg.ClaudeCredentials,
 		Model:             d.botCfg.Model,
 		ResultCh:          resultCh,
-		AgentEventCh:      agentEventCh,
+		ToolEventCh:       toolEventCh,
 	})
 
 	// Renew typing every 3s until the result is ready
@@ -1013,20 +1014,70 @@ func (d *Dispatcher) dispatchJob(ctx context.Context, chatID int64, topicID int,
 	d.maybeSummarizeSession(ctx, chatID, topicID, result.InputTokens)
 }
 
-// buildAgentStatusText builds a single status message showing all subagents' progress.
-func (d *Dispatcher) buildAgentStatusText(agents []subagentInfo, isBackground bool) string {
+// toolIcon returns an emoji icon for the given tool name.
+func toolIcon(name string) string {
+	switch name {
+	case "Agent":
+		return "🤖"
+	case "Read":
+		return "📖"
+	case "Write":
+		return "📝"
+	case "Edit":
+		return "✏️"
+	case "Bash":
+		return "🖥️"
+	case "Grep":
+		return "🔍"
+	case "Glob":
+		return "📂"
+	case "Skill":
+		return "⚡"
+	case "WebSearch", "WebFetch":
+		return "🌐"
+	case "TodoWrite":
+		return "📋"
+	default:
+		return "🔧"
+	}
+}
+
+// buildProgressText builds a status message showing live tool call progress.
+// Shows Agent calls as prominent items, other tools as a compact activity log.
+func (d *Dispatcher) buildProgressText(activities []toolActivity, isBackground bool) string {
 	var b strings.Builder
 	if isBackground {
 		b.WriteString("⏳ Processing in the background...\n\n")
 	}
-	for _, a := range agents {
+
+	// 只显示最近 8 条活动，避免消息过长
+	start := 0
+	if len(activities) > 8 {
+		start = len(activities) - 8
+	}
+
+	for _, a := range activities[start:] {
+		icon := toolIcon(a.toolName)
 		if a.done {
-			b.WriteString("✅ ")
-		} else {
-			b.WriteString("🔄 ")
+			icon = "✅"
 		}
-		b.WriteString(escapeMarkdown(a.description))
-		b.WriteString(" _(" + escapeMarkdown(a.subagentType) + ")_\n")
+
+		if a.toolName == "Agent" {
+			// Agent 行显示完整信息
+			agentType := a.subagentType
+			if agentType == "" {
+				agentType = "general"
+			}
+			b.WriteString(fmt.Sprintf("%s %s _(%s)_\n", icon, escapeMarkdown(a.summary), escapeMarkdown(agentType)))
+		} else {
+			// 其他工具紧凑显示
+			summary := a.summary
+			if summary != "" {
+				b.WriteString(fmt.Sprintf("%s `%s` %s\n", icon, a.toolName, escapeMarkdown(summary)))
+			} else {
+				b.WriteString(fmt.Sprintf("%s `%s`\n", icon, a.toolName))
+			}
+		}
 	}
 	return strings.TrimRight(b.String(), "\n")
 }

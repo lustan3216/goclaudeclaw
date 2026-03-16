@@ -27,21 +27,21 @@ const (
 	ModeBackground
 )
 
-// AgentEventType indicates what happened with a subagent.
-type AgentEventType int
+// ToolEventType indicates what happened with a tool call.
+type ToolEventType int
 
 const (
-	AgentStarted   AgentEventType = iota // subagent spawned
-	AgentCompleted                        // subagent finished
+	ToolStarted   ToolEventType = iota // tool call started
+	ToolCompleted                       // tool call finished
 )
 
-// AgentEvent is emitted when Claude spawns or completes a subagent (Agent tool).
-type AgentEvent struct {
-	Type         AgentEventType
-	ToolUseID    string // unique ID for this subagent invocation
-	Description  string // short task description from input.description
-	SubagentType string // e.g. "Explore", "Plan", "general-purpose"
-	Content      string // result content (only set on AgentCompleted)
+// ToolEvent is emitted when Claude calls any tool (Agent, Read, Write, Bash, etc.).
+type ToolEvent struct {
+	Type         ToolEventType
+	ToolUseID    string // unique ID for this tool invocation
+	ToolName     string // tool name: "Agent", "Read", "Bash", "Edit", etc.
+	Summary      string // human-readable summary of what this tool call does
+	SubagentType string // only for Agent tool: e.g. "Explore", "Plan"
 }
 
 // Result holds the claude execution result.
@@ -64,7 +64,7 @@ type Job struct {
 	ClaudeCredentials []config.ClaudeCredential  // OAuth credential sets; tried in order after API keys are exhausted
 	Model             string                     // model override passed as --model flag; empty = claude's default
 	ResultCh         chan<- Result               // caller listens on this channel for the result
-	AgentEventCh     chan<- AgentEvent           // optional: receives subagent start/complete events (nil = no events)
+	ToolEventCh      chan<- ToolEvent            // optional: receives tool start/complete events (nil = no events)
 }
 
 // claudeJSONOutput is the output structure of claude --output-format json.
@@ -128,8 +128,8 @@ func (m *Manager) Submit(job Job) {
 		slog.Debug("job enqueued", "workspace", job.Workspace, "chat_id", job.ChatID, "topic_id", job.TopicID, "mode", job.Mode)
 	case <-job.Ctx.Done():
 		slog.Warn("context cancelled before job could be enqueued", "workspace", job.Workspace)
-		if job.AgentEventCh != nil {
-			close(job.AgentEventCh)
+		if job.ToolEventCh != nil {
+			close(job.ToolEventCh)
 		}
 		if job.ResultCh != nil {
 			job.ResultCh <- Result{Err: job.Ctx.Err()}
@@ -161,8 +161,8 @@ func (m *Manager) runQueue(key queueKey, q <-chan Job) {
 		result := m.execute(job)
 		// Close agent event channel before sending result so dispatcher
 		// can drain all events before processing the final result.
-		if job.AgentEventCh != nil {
-			close(job.AgentEventCh)
+		if job.ToolEventCh != nil {
+			close(job.ToolEventCh)
 		}
 		if job.ResultCh != nil {
 			job.ResultCh <- result
@@ -329,6 +329,81 @@ type agentInput struct {
 	SubagentType string `json:"subagent_type"`
 }
 
+// toolInput is a generic struct for extracting summaries from tool_use inputs.
+type toolInput struct {
+	FilePath string `json:"file_path"`
+	Path     string `json:"path"`
+	Command  string `json:"command"`
+	Pattern  string `json:"pattern"`
+	Prompt   string `json:"prompt"`
+	Query    string `json:"query"`
+	Skill    string `json:"skill"`
+	Content  string `json:"content"`
+}
+
+// toolSummary extracts a human-readable one-line summary from a tool_use block.
+func toolSummary(name string, input json.RawMessage) string {
+	var ti toolInput
+	_ = json.Unmarshal(input, &ti)
+
+	switch name {
+	case "Agent":
+		var ai agentInput
+		_ = json.Unmarshal(input, &ai)
+		return ai.Description
+	case "Read":
+		return shortenPath(ti.FilePath)
+	case "Write":
+		return shortenPath(ti.FilePath)
+	case "Edit":
+		return shortenPath(ti.FilePath)
+	case "Bash":
+		return truncate(ti.Command, 60)
+	case "Grep":
+		s := ti.Pattern
+		if ti.Path != "" {
+			s += " in " + shortenPath(ti.Path)
+		}
+		return s
+	case "Glob":
+		return ti.Pattern
+	case "Skill":
+		return ti.Skill
+	case "WebSearch", "WebFetch":
+		if ti.Query != "" {
+			return truncate(ti.Query, 60)
+		}
+		return ""
+	default:
+		return ""
+	}
+}
+
+// shortenPath returns the last 2 path components for brevity.
+func shortenPath(p string) string {
+	if p == "" {
+		return ""
+	}
+	parts := strings.Split(p, "/")
+	if len(parts) <= 2 {
+		return p
+	}
+	return "…/" + strings.Join(parts[len(parts)-2:], "/")
+}
+
+// truncate returns the first n characters of s, adding "…" if truncated.
+func truncate(s string, n int) string {
+	s = strings.TrimSpace(s)
+	// 去掉换行
+	if idx := strings.IndexByte(s, '\n'); idx >= 0 {
+		s = s[:idx]
+	}
+	if len(s) <= n {
+		return s
+	}
+	return s[:n] + "…"
+}
+
 // streamResultUsage is the usage field in the result event.
 type streamResultUsage struct {
 	InputTokens            int `json:"input_tokens"`
@@ -371,6 +446,7 @@ func (m *Manager) executeWithKey(job Job, sessionID string, isNewSession bool, a
 
 	// Track active Agent tool_use IDs to match tool_results back to subagent starts
 	activeAgents := make(map[string]agentInput)
+	activeTools := make(map[string]string) // tool_use_id → tool name
 
 	// Parsed output fields extracted from stream events
 	var parsedSessionID string
@@ -411,27 +487,32 @@ func (m *Manager) executeWithKey(job Job, sessionID string, isNewSession bool, a
 				}
 
 			case "assistant":
-				// Check for Agent tool_use in assistant message content
+				// Detect ALL tool_use calls in assistant message content
 				if len(evt.Message) > 0 {
 					var msg streamMessage
 					if err := json.Unmarshal(evt.Message, &msg); err == nil {
 						for _, block := range msg.Content {
-							if block.Type == "tool_use" && block.Name == "Agent" && block.ID != "" {
-								var inp agentInput
-								if err := json.Unmarshal(block.Input, &inp); err == nil {
+							if block.Type == "tool_use" && block.ID != "" {
+								summary := toolSummary(block.Name, block.Input)
+								activeTools[block.ID] = block.Name
+								if block.Name == "Agent" {
+									var inp agentInput
+									_ = json.Unmarshal(block.Input, &inp)
 									activeAgents[block.ID] = inp
-									if job.AgentEventCh != nil {
-										job.AgentEventCh <- AgentEvent{
-											Type:         AgentStarted,
-											ToolUseID:    block.ID,
-											Description:  inp.Description,
-											SubagentType: inp.SubagentType,
-										}
+								}
+								if job.ToolEventCh != nil {
+									te := ToolEvent{
+										Type:      ToolStarted,
+										ToolUseID: block.ID,
+										ToolName:  block.Name,
+										Summary:   summary,
 									}
-									slog.Info("subagent started",
-										"tool_use_id", block.ID,
-										"description", inp.Description,
-										"subagent_type", inp.SubagentType)
+									if block.Name == "Agent" {
+										var inp agentInput
+										_ = json.Unmarshal(block.Input, &inp)
+										te.SubagentType = inp.SubagentType
+									}
+									job.ToolEventCh <- te
 								}
 							}
 						}
@@ -439,28 +520,32 @@ func (m *Manager) executeWithKey(job Job, sessionID string, isNewSession bool, a
 				}
 
 			case "user":
-				// Check for tool_result matching an active Agent
+				// Detect tool_result completions
 				if len(evt.Message) > 0 {
 					var msg streamMessage
 					if err := json.Unmarshal(evt.Message, &msg); err == nil {
 						for _, block := range msg.Content {
 							if block.Type == "tool_result" && block.ToolUseID != "" {
-								if inp, ok := activeAgents[block.ToolUseID]; ok {
-									content := extractToolResultContent(block.ContentVal)
-									if job.AgentEventCh != nil {
-										job.AgentEventCh <- AgentEvent{
-											Type:         AgentCompleted,
-											ToolUseID:    block.ToolUseID,
-											Description:  inp.Description,
-											SubagentType: inp.SubagentType,
-											Content:      content,
+								toolName, ok := activeTools[block.ToolUseID]
+								if !ok {
+									continue
+								}
+								delete(activeTools, block.ToolUseID)
+								if job.ToolEventCh != nil {
+									te := ToolEvent{
+										Type:      ToolCompleted,
+										ToolUseID: block.ToolUseID,
+										ToolName:  toolName,
+									}
+									if toolName == "Agent" {
+										if inp, ok := activeAgents[block.ToolUseID]; ok {
+											te.Summary = inp.Description
+											te.SubagentType = inp.SubagentType
 										}
 									}
-									delete(activeAgents, block.ToolUseID)
-									slog.Info("subagent completed",
-										"tool_use_id", block.ToolUseID,
-										"content_len", len(content))
+									job.ToolEventCh <- te
 								}
+								delete(activeAgents, block.ToolUseID)
 							}
 						}
 					}
