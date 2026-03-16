@@ -211,7 +211,7 @@ func (m *Manager) execute(job Job) Result {
 	}
 	var lastResult Result
 	for i, key := range keys {
-		lastResult = m.executeWithKey(job, sessionID, isNewSession, key)
+		lastResult = m.executeWithKey(job, sessionID, isNewSession, key, "")
 		if lastResult.Err == nil {
 			return lastResult
 		}
@@ -230,17 +230,31 @@ func (m *Manager) execute(job Job) Result {
 	}
 
 	// --- Phase 2: Claude OAuth credentials ---
-	// Each credential swaps ~/.claude/.credentials.json and forces a new session
-	// (OAuth sessions are account-scoped; resuming across accounts is not supported).
+	// Two modes:
+	//   - Full OAuth (access_token + refresh_token): swaps ~/.claude/.credentials.json, forces new session
+	//   - Setup-token (access_token only):           injects CLAUDE_CODE_OAUTH_TOKEN env var
 	for i, cred := range job.ClaudeCredentials {
-		if err := swapCredential(cred); err != nil {
-			slog.Warn("credential swap failed, skipping",
-				"cred_index", i, "err", err)
+		var credResult Result
+		if cred.RefreshToken != "" {
+			// Full OAuth credential — swap credentials file
+			if err := swapCredential(cred); err != nil {
+				slog.Warn("credential swap failed, skipping",
+					"cred_index", i, "err", err)
+				continue
+			}
+			slog.Info("retrying with Claude OAuth credential (file swap)",
+				"cred_index", i, "workspace", job.Workspace, "chat_id", job.ChatID)
+			credResult = m.executeWithKey(job, "", true, "", "") // force new session
+		} else if cred.AccessToken != "" {
+			// Setup-token credential — use CLAUDE_CODE_OAUTH_TOKEN env var
+			slog.Info("retrying with Claude setup-token credential (env var)",
+				"cred_index", i, "workspace", job.Workspace, "chat_id", job.ChatID)
+			credResult = m.executeWithKey(job, "", true, "", cred.AccessToken)
+		} else {
+			slog.Warn("credential has no access_token, skipping", "cred_index", i)
 			continue
 		}
-		slog.Info("retrying with Claude credential",
-			"cred_index", i, "workspace", job.Workspace, "chat_id", job.ChatID)
-		lastResult = m.executeWithKey(job, "", true, "") // force new session; no API key override
+		lastResult = credResult
 		if lastResult.Err == nil {
 			return lastResult
 		}
@@ -254,8 +268,8 @@ func (m *Manager) execute(job Job) Result {
 	return lastResult
 }
 
-// executeWithKey runs the claude CLI with a specific API key (empty = use env var).
-func (m *Manager) executeWithKey(job Job, sessionID string, isNewSession bool, apiKey string) Result {
+// executeWithKey runs the claude CLI with a specific API key or OAuth token (empty = use env var).
+func (m *Manager) executeWithKey(job Job, sessionID string, isNewSession bool, apiKey, oauthToken string) Result {
 	args := m.buildArgs(job, sessionID)
 
 	slog.Info("executing claude",
@@ -266,11 +280,12 @@ func (m *Manager) executeWithKey(job Job, sessionID string, isNewSession bool, a
 		"mode", job.Mode,
 		"session_id", sessionID,
 		"new_session", isNewSession,
-		"has_key_override", apiKey != "")
+		"has_key_override", apiKey != "",
+		"has_oauth_token", oauthToken != "")
 
 	cmd := exec.CommandContext(job.Ctx, m.claudePath, args...)
 	cmd.Dir = job.Workspace
-	cmd.Env = filteredEnv(apiKey)
+	cmd.Env = filteredEnv(apiKey, oauthToken)
 
 	// Stream output
 	stdout, err := cmd.StdoutPipe()
