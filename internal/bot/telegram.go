@@ -161,7 +161,7 @@ func (b *Bot) Run(ctx context.Context) {
 func (b *Bot) runPollingOnce(ctx context.Context) error {
 	updates, err := b.api.UpdatesViaLongPolling(
 		// Explicitly include message_reaction (not included by default, must be declared)
-		(&telego.GetUpdatesParams{}).WithAllowedUpdates("message", "message_reaction"),
+		(&telego.GetUpdatesParams{}).WithAllowedUpdates("message", "message_reaction", "callback_query"),
 		telego.WithLongPollingContext(ctx),
 		telego.WithLongPollingRetryTimeout(3*time.Second),
 	)
