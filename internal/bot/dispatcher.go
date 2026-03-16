@@ -314,24 +314,24 @@ func (d *Dispatcher) handleCommand(ctx context.Context, msg *telego.Message, top
 	case "start", "help":
 		d.reply(chatID, topicID, fmt.Sprintf(
 			"⚡ *claudeclaw* `%s`\n\n"+
-				"*會話*\n"+
-				"`/clear` — 清除當前 session\n"+
-				"`/status` — 顯示狀態與版本\n"+
-				"`/usage` — 查看 token 用量\n\n"+
-				"*任務*\n"+
-				"`/bg <任務>` — 背景執行\n"+
-				"😱 😭 對訊息 react — 取消執行中任務\n\n"+
-				"*模型*\n"+
-				"`/models` — 列出可用模型\n"+
-				"`/model <名稱>` — 切換模型\n\n"+
-				"*設定*\n"+
-				"`/config` — 查看當前設定\n"+
-				"`/set <key> <value>` — 修改設定\n"+
-				"`/unset <key>` — 清除設定\n"+
-				"可設定的 key：`auto_update` · `security_level`\n\n"+
-				"*管理*\n"+
-				"`/adduser <id>` — 新增授權用戶\n"+
-				"`/update` — 拉取最新版本並重啟",
+				"*Session*\n"+
+				"`/clear` — reset current session\n"+
+				"`/status` — show status & version\n"+
+				"`/usage` — view token usage\n\n"+
+				"*Tasks*\n"+
+				"`/bg <task>` — run in background\n"+
+				"😱 😭 react to cancel a running task\n\n"+
+				"*Models*\n"+
+				"`/models` — list available models\n"+
+				"`/model <name>` — switch model\n\n"+
+				"*Config*\n"+
+				"`/config` — show current settings\n"+
+				"`/set <key> <value>` — update a setting\n"+
+				"`/unset <key>` — clear a setting\n"+
+				"Keys: `auto_update` · `security_level`\n\n"+
+				"*Admin*\n"+
+				"`/adduser <id>` — authorize a user\n"+
+				"`/update` — pull latest & restart",
 			buildinfo.Version,
 		))
 	case "config":
