@@ -777,10 +777,11 @@ func (d *Dispatcher) dispatchJob(ctx context.Context, chatID int64, topicID int,
 		ResultCh:          resultCh,
 	})
 
-	// Renew typing every 4s until the result is ready
+	// Renew typing every 3s until the result is ready
+	// Telegram's typing indicator expires in ~5s, 3s gives 2s of margin against network jitter
 	typingDone := make(chan struct{})
 	go func() {
-		ticker := time.NewTicker(4 * time.Second)
+		ticker := time.NewTicker(3 * time.Second)
 		defer ticker.Stop()
 		for {
 			select {
