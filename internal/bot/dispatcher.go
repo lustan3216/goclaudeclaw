@@ -57,15 +57,11 @@ type topicQueue struct {
 // cancelEmojis — users can cancel an in-progress task by reacting with one of these emojis.
 var cancelEmojis = map[string]bool{"😱": true, "😭": true}
 
-// trackedAgent holds state for a single subagent's Telegram message.
-type trackedAgent struct {
+// subagentInfo holds state for a single subagent within a job.
+type subagentInfo struct {
 	toolUseID    string
 	description  string
 	subagentType string
-	messageID    int    // Telegram message ID for this agent's status message
-	chatID       int64
-	topicID      int
-	content      string // latest result content (populated on completion)
 	done         bool
 }
 
@@ -93,9 +89,6 @@ type Dispatcher struct {
 	pendingMu    sync.Mutex
 	topicPending map[chatTopicKey]*topicQueue
 
-	agentsMu       sync.Mutex
-	trackedAgents  map[string]*trackedAgent // tool_use_id → tracked agent info
-
 	runnerMgr  *runner.Manager
 	sessionMgr *session.Manager
 	cfg        *config.Config
@@ -119,7 +112,6 @@ func NewDispatcher(
 		completionCounts: make(map[chatTopicKey]int),
 		cancelReactions:  make(map[int]cancelEntry),
 		topicPending:     make(map[chatTopicKey]*topicQueue),
-		trackedAgents:    make(map[string]*trackedAgent),
 		runnerMgr:        runnerMgr,
 		sessionMgr:       sessionMgr,
 		cfg:              cfg,
@@ -140,12 +132,6 @@ func (d *Dispatcher) UpdateConfig(cfg *config.Config, botCfg config.BotConfig) {
 
 // Handle receives a single message from Telegram and dispatches it immediately.
 func (d *Dispatcher) Handle(ctx context.Context, update telego.Update) {
-	// Handle callback_query for subagent status buttons
-	if update.CallbackQuery != nil {
-		d.handleCallbackQuery(update.CallbackQuery)
-		return
-	}
-
 	// Handle reaction cancellation: user reacts with 😱 or 😭 to cancel an in-progress task
 	if update.MessageReaction != nil {
 		d.handleReactionCancel(update.MessageReaction)
@@ -772,18 +758,61 @@ func (d *Dispatcher) dispatchJob(ctx context.Context, chatID int64, topicID int,
 	// Create agent event channel for subagent visibility
 	agentEventCh := make(chan runner.AgentEvent, 16)
 
-	// Start agent event listener goroutine — sends Telegram messages for each subagent
+	// For background jobs, send status message upfront; for foreground, send on first subagent event
+	var statusMsgID int
+	if mode == runner.ModeBackground {
+		statusMsgID = d.replyTo(chatID, topicID, replyToID, "⏳ Processing in the background...")
+	}
+
+	// Start agent event listener goroutine — edits the status message with subagent progress
 	agentDone := make(chan struct{})
 	go func() {
 		defer close(agentDone)
+		var agents []subagentInfo
 		for evt := range agentEventCh {
-			d.handleAgentEvent(evt, chatID, topicID)
+			agentType := evt.SubagentType
+			if agentType == "" {
+				agentType = "general"
+			}
+			switch evt.Type {
+			case runner.AgentStarted:
+				agents = append(agents, subagentInfo{
+					toolUseID:    evt.ToolUseID,
+					description:  evt.Description,
+					subagentType: agentType,
+				})
+				slog.Info("subagent started", "description", evt.Description, "type", agentType, "tool_use_id", evt.ToolUseID)
+			case runner.AgentCompleted:
+				for i := range agents {
+					if agents[i].toolUseID == evt.ToolUseID {
+						agents[i].done = true
+						break
+					}
+				}
+				slog.Info("subagent completed", "tool_use_id", evt.ToolUseID)
+			}
+			// 构建子代理状态文本
+			text := d.buildAgentStatusText(agents, mode == runner.ModeBackground)
+			if statusMsgID == 0 {
+				// 前台任务：首次子代理事件时发送新消息
+				statusMsgID = d.replyTo(chatID, topicID, replyToID, text)
+			} else {
+				// 编辑已有的状态消息
+				_, err := d.botAPI.EditMessageText(&telego.EditMessageTextParams{
+					ChatID:    telego.ChatID{ID: chatID},
+					MessageID: statusMsgID,
+					Text:      text,
+					ParseMode: telego.ModeMarkdown,
+				})
+				if err != nil {
+					slog.Warn("failed to edit agent status message", "err", err, "msg_id", statusMsgID)
+				}
+			}
 		}
 	}()
 
-	// Background job: reply immediately to user, execute asynchronously
+	// Background job: execute asynchronously (status message already sent above)
 	if mode == runner.ModeBackground {
-		d.replyTo(chatID, topicID, replyToID, "⏳ Processing in the background, will notify you when done.")
 
 		resultCh := make(chan runner.Result, 1)
 		d.runnerMgr.Submit(runner.Job{
@@ -918,123 +947,22 @@ func (d *Dispatcher) dispatchJob(ctx context.Context, chatID int64, topicID int,
 	d.maybeSummarizeSession(ctx, chatID, topicID, result.InputTokens)
 }
 
-// handleAgentEvent processes a single subagent event: sends or updates a Telegram status message.
-func (d *Dispatcher) handleAgentEvent(evt runner.AgentEvent, chatID int64, topicID int) {
-	switch evt.Type {
-	case runner.AgentStarted:
-		// 发送子代理启动消息（带内联按钮）
-		agentType := evt.SubagentType
-		if agentType == "" {
-			agentType = "general"
-		}
-		text := fmt.Sprintf("🤖 *Subagent:* %s\n*Type:* %s\n*Status:* Running...", escapeMarkdown(evt.Description), escapeMarkdown(agentType))
-
-		callbackData := "agent:" + evt.ToolUseID
-		params := &telego.SendMessageParams{
-			ChatID:    telego.ChatID{ID: chatID},
-			Text:      text,
-			ParseMode: telego.ModeMarkdown,
-			ReplyMarkup: &telego.InlineKeyboardMarkup{
-				InlineKeyboard: [][]telego.InlineKeyboardButton{{
-					{Text: "📋 View Status", CallbackData: callbackData},
-				}},
-			},
-		}
-		if topicID > 0 {
-			params.MessageThreadID = topicID
-		}
-
-		sent, err := d.botAPI.SendMessage(params)
-		if err != nil {
-			slog.Warn("failed to send subagent start message", "err", err, "tool_use_id", evt.ToolUseID)
-			return
-		}
-
-		d.agentsMu.Lock()
-		d.trackedAgents[evt.ToolUseID] = &trackedAgent{
-			toolUseID:    evt.ToolUseID,
-			description:  evt.Description,
-			subagentType: agentType,
-			messageID:    sent.MessageID,
-			chatID:       chatID,
-			topicID:      topicID,
-		}
-		d.agentsMu.Unlock()
-
-	case runner.AgentCompleted:
-		d.agentsMu.Lock()
-		agent, ok := d.trackedAgents[evt.ToolUseID]
-		if ok {
-			agent.done = true
-			agent.content = evt.Content
-		}
-		d.agentsMu.Unlock()
-
-		if !ok {
-			return
-		}
-
-		// 更新消息为完成状态
-		text := fmt.Sprintf("✅ *Subagent:* %s\n*Type:* %s\n*Status:* Completed", escapeMarkdown(agent.description), escapeMarkdown(agent.subagentType))
-		callbackData := "agent:" + evt.ToolUseID
-		_, err := d.botAPI.EditMessageText(&telego.EditMessageTextParams{
-			ChatID:    telego.ChatID{ID: agent.chatID},
-			MessageID: agent.messageID,
-			Text:      text,
-			ParseMode: telego.ModeMarkdown,
-			ReplyMarkup: &telego.InlineKeyboardMarkup{
-				InlineKeyboard: [][]telego.InlineKeyboardButton{{
-					{Text: "📋 View Result", CallbackData: callbackData},
-				}},
-			},
-		})
-		if err != nil {
-			slog.Warn("failed to edit subagent complete message", "err", err, "tool_use_id", evt.ToolUseID)
-		}
+// buildAgentStatusText builds a single status message showing all subagents' progress.
+func (d *Dispatcher) buildAgentStatusText(agents []subagentInfo, isBackground bool) string {
+	var b strings.Builder
+	if isBackground {
+		b.WriteString("⏳ Processing in the background...\n\n")
 	}
-}
-
-// handleCallbackQuery handles inline button clicks for subagent status.
-func (d *Dispatcher) handleCallbackQuery(cq *telego.CallbackQuery) {
-	if cq.Data == "" || !strings.HasPrefix(cq.Data, "agent:") {
-		return
-	}
-
-	toolUseID := strings.TrimPrefix(cq.Data, "agent:")
-
-	d.agentsMu.Lock()
-	agent, ok := d.trackedAgents[toolUseID]
-	d.agentsMu.Unlock()
-
-	if !ok {
-		_ = d.botAPI.AnswerCallbackQuery(&telego.AnswerCallbackQueryParams{
-			CallbackQueryID: cq.ID,
-			Text:            "Agent info expired",
-			ShowAlert:       false,
-		})
-		return
-	}
-
-	var popupText string
-	if agent.done {
-		content := agent.content
-		if len(content) > 180 {
-			content = content[:180] + "..."
+	for _, a := range agents {
+		if a.done {
+			b.WriteString("✅ ")
+		} else {
+			b.WriteString("🔄 ")
 		}
-		popupText = fmt.Sprintf("✅ %s\n\n%s", agent.description, content)
-	} else {
-		popupText = fmt.Sprintf("⏳ %s\n\nStill running...", agent.description)
+		b.WriteString(escapeMarkdown(a.description))
+		b.WriteString(" _(" + escapeMarkdown(a.subagentType) + ")_\n")
 	}
-
-	// Telegram popup: max 200 chars, ShowAlert=true for a persistent popup
-	if len(popupText) > 200 {
-		popupText = popupText[:197] + "..."
-	}
-	_ = d.botAPI.AnswerCallbackQuery(&telego.AnswerCallbackQueryParams{
-		CallbackQueryID: cq.ID,
-		Text:            popupText,
-		ShowAlert:       true,
-	})
+	return strings.TrimRight(b.String(), "\n")
 }
 
 // escapeMarkdown escapes special Markdown characters for Telegram MarkdownV1.
@@ -1244,7 +1172,7 @@ func (d *Dispatcher) sendOutputTo(chatID int64, topicID int, replyToID int, outp
 }
 
 // replyTo replies to a specific message (quote); falls back to a plain send if replyToID <= 0.
-func (d *Dispatcher) replyTo(chatID int64, topicID int, replyToID int, text string) {
+func (d *Dispatcher) replyTo(chatID int64, topicID int, replyToID int, text string) int {
 	params := &telego.SendMessageParams{
 		ChatID:    telego.ChatID{ID: chatID},
 		Text:      text,
@@ -1256,14 +1184,21 @@ func (d *Dispatcher) replyTo(chatID int64, topicID int, replyToID int, text stri
 	if replyToID > 0 {
 		params.ReplyParameters = &telego.ReplyParameters{MessageID: replyToID}
 	}
-	if _, err := d.botAPI.SendMessage(params); err != nil {
+	sent, err := d.botAPI.SendMessage(params)
+	if err != nil {
 		// Markdown parse failure: fall back to plain text and retry
 		params.ParseMode = ""
-		if _, err2 := d.botAPI.SendMessage(params); err2 != nil {
+		sent, err = d.botAPI.SendMessage(params)
+		if err != nil {
 			slog.Error("failed to send Telegram message",
-				"chat_id", chatID, "topic_id", topicID, "err", err2, "bot", d.botCfg.Name)
+				"chat_id", chatID, "topic_id", topicID, "err", err, "bot", d.botCfg.Name)
+			return 0
 		}
 	}
+	if sent != nil {
+		return sent.MessageID
+	}
+	return 0
 }
 
 // reply sends a text message to the specified chat (optionally a topic) without quoting any message.

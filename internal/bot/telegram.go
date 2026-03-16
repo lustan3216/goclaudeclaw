@@ -160,8 +160,8 @@ func (b *Bot) Run(ctx context.Context) {
 // runPollingOnce runs one polling session until the channel closes or ctx is cancelled.
 func (b *Bot) runPollingOnce(ctx context.Context) error {
 	updates, err := b.api.UpdatesViaLongPolling(
-		// Explicitly include message_reaction and callback_query (not included by default, must be declared)
-		(&telego.GetUpdatesParams{}).WithAllowedUpdates("message", "message_reaction", "callback_query"),
+		// Explicitly include message_reaction (not included by default, must be declared)
+		(&telego.GetUpdatesParams{}).WithAllowedUpdates("message", "message_reaction"),
 		telego.WithLongPollingContext(ctx),
 		telego.WithLongPollingRetryTimeout(3*time.Second),
 	)
