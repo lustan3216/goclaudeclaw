@@ -19,6 +19,8 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
+	"unicode/utf8"
 	"time"
 
 	"github.com/mymmrac/telego"
@@ -738,8 +740,10 @@ func (d *Dispatcher) dispatchJob(ctx context.Context, chatID int64, topicID int,
 
 	// Background job: reply immediately to user, execute asynchronously
 	if mode == runner.ModeBackground {
-		d.replyTo(chatID, topicID, replyToID, "⏳ Processing in the background, will notify you when done.")
+		title := jobTitle(prompt, 40)
+		d.replyTo(chatID, topicID, replyToID, fmt.Sprintf("⏳ 背景執行中: %s", title))
 
+		lastActivity := &atomic.Pointer[string]{}
 		resultCh := make(chan runner.Result, 1)
 		d.runnerMgr.Submit(runner.Job{
 			Ctx:              jobCtx,
@@ -752,12 +756,49 @@ func (d *Dispatcher) dispatchJob(ctx context.Context, chatID int64, topicID int,
 			AnthropicAPIKeys:  d.botCfg.AnthropicAPIKeys,
 			ClaudeCredentials: d.botCfg.ClaudeCredentials,
 			Model:             d.botCfg.Model,
+			LastActivity:     lastActivity,
 			ResultCh:          resultCh,
 		})
+
+		// 背景任務也送長任務通知
+		bgTaskStart := time.Now()
+		bgLongTaskDone := make(chan struct{})
+		go func() {
+			select {
+			case <-bgLongTaskDone:
+				return
+			case <-jobCtx.Done():
+				return
+			case <-time.After(20 * time.Second):
+				msg := fmt.Sprintf("⏳ %s 還在跑，請稍候...", title)
+				if p := lastActivity.Load(); p != nil && *p != "" {
+					msg += fmt.Sprintf("\n最後動作: %s", truncateActivity(*p))
+				}
+				d.replyTo(chatID, topicID, 0, msg)
+			}
+			ticker := time.NewTicker(60 * time.Second)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-bgLongTaskDone:
+					return
+				case <-jobCtx.Done():
+					return
+				case <-ticker.C:
+					elapsed := int(time.Since(bgTaskStart).Seconds())
+					msg := fmt.Sprintf("⏳ %s 仍在執行中 (%ds)", title, elapsed)
+					if p := lastActivity.Load(); p != nil && *p != "" {
+						msg += fmt.Sprintf("\n最後動作: %s", truncateActivity(*p))
+					}
+					d.replyTo(chatID, topicID, 0, msg)
+				}
+			}
+		}()
 
 		go func() {
 			defer cleanup()
 			result := <-resultCh
+			close(bgLongTaskDone)
 			if result.Err != nil {
 				if jobCtx.Err() != nil {
 					// Cancelled — discard any pending messages for this topic and release the queue
@@ -806,17 +847,21 @@ func (d *Dispatcher) dispatchJob(ctx context.Context, chatID int64, topicID int,
 		slog.Warn("SendChatAction failed", "err", err, "chat_id", chatID, "topic_id", topicID)
 	}
 
+	title := jobTitle(prompt, 40)
+	lastActivity := &atomic.Pointer[string]{}
 	resultCh := make(chan runner.Result, 1)
 	d.runnerMgr.Submit(runner.Job{
-		Ctx:       jobCtx,
-		Workspace:        d.workspace,
-		BotName:          d.botCfg.Name,
-		ChatID:           chatID,
-		TopicID:          topicID,
-		Prompt:           prompt,
+		Ctx:               jobCtx,
+		Workspace:         d.workspace,
+		BotName:           d.botCfg.Name,
+		ChatID:            chatID,
+		TopicID:           topicID,
+		Prompt:            prompt,
 		Mode:              mode,
 		AnthropicAPIKeys:  d.botCfg.AnthropicAPIKeys,
 		ClaudeCredentials: d.botCfg.ClaudeCredentials,
+		Model:             d.botCfg.Model,
+		LastActivity:      lastActivity,
 		ResultCh:          resultCh,
 	})
 
@@ -847,7 +892,7 @@ func (d *Dispatcher) dispatchJob(ctx context.Context, chatID int64, topicID int,
 		}
 	}()
 
-	// Notify user if task runs longer than 20s, then every 60s after that
+	// 超過 20s 通知使用者，之後每 60s 回報一次進度
 	taskStart := time.Now()
 	longTaskDone := make(chan struct{})
 	go func() {
@@ -857,7 +902,11 @@ func (d *Dispatcher) dispatchJob(ctx context.Context, chatID int64, topicID int,
 		case <-jobCtx.Done():
 			return
 		case <-time.After(20 * time.Second):
-			d.replyTo(chatID, topicID, 0, "⏳ 還在跑，請稍候...")
+			msg := fmt.Sprintf("⏳ %s 還在跑，請稍候...", title)
+			if p := lastActivity.Load(); p != nil && *p != "" {
+				msg += fmt.Sprintf("\n最後動作: %s", truncateActivity(*p))
+			}
+			d.replyTo(chatID, topicID, 0, msg)
 		}
 		ticker := time.NewTicker(60 * time.Second)
 		defer ticker.Stop()
@@ -869,7 +918,11 @@ func (d *Dispatcher) dispatchJob(ctx context.Context, chatID int64, topicID int,
 				return
 			case <-ticker.C:
 				elapsed := int(time.Since(taskStart).Seconds())
-				d.replyTo(chatID, topicID, 0, fmt.Sprintf("⏳ 仍在執行中 (%ds)...", elapsed))
+				msg := fmt.Sprintf("⏳ %s 仍在執行中 (%ds)", title, elapsed)
+				if p := lastActivity.Load(); p != nil && *p != "" {
+					msg += fmt.Sprintf("\n最後動作: %s", truncateActivity(*p))
+				}
+				d.replyTo(chatID, topicID, 0, msg)
 			}
 		}
 	}()
@@ -1418,5 +1471,26 @@ func (d *Dispatcher) saveRestartNotify(chatID int64, topicID int) {
 // currentYearMonth returns the current UTC year-month string for vault file naming.
 func currentYearMonth() string {
 	return time.Now().UTC().Format("2006-01")
+}
+
+// jobTitle 從 prompt 提取短標題（第一行，最多 maxRunes 個字元）
+func jobTitle(prompt string, maxRunes int) string {
+	first := strings.SplitN(strings.TrimSpace(prompt), "\n", 2)[0]
+	first = strings.TrimSpace(first)
+	if utf8.RuneCountInString(first) <= maxRunes {
+		return first
+	}
+	runes := []rune(first)
+	return string(runes[:maxRunes]) + "..."
+}
+
+// truncateActivity 截斷最後活動行至最多 80 個字元，避免通知過長
+func truncateActivity(s string) string {
+	const max = 80
+	if utf8.RuneCountInString(s) <= max {
+		return s
+	}
+	runes := []rune(s)
+	return string(runes[:max]) + "..."
 }
 

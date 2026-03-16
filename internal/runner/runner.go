@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"strings"
 	"sync"
+	"sync/atomic"
 
 	"github.com/lustan3216/claudeclaw/internal/config"
 	"github.com/lustan3216/claudeclaw/internal/memory"
@@ -47,6 +48,7 @@ type Job struct {
 	ClaudeCredentials []config.ClaudeCredential  // OAuth credential sets; tried in order after API keys are exhausted
 	Model             string                     // model override passed as --model flag; empty = claude's default
 	ResultCh         chan<- Result               // caller listens on this channel for the result
+	LastActivity     *atomic.Pointer[string]    // updated live with the last stdout line from claude; may be nil
 }
 
 // claudeJSONOutput is the output structure of claude --output-format json.
@@ -314,6 +316,11 @@ func (m *Manager) executeWithKey(job Job, sessionID string, isNewSession bool, a
 			line := scanner.Text()
 			outputBuilder.WriteString(line)
 			outputBuilder.WriteByte('\n')
+			// 更新最後活動行供長任務通知使用
+			if job.LastActivity != nil && strings.TrimSpace(line) != "" {
+				trimmed := strings.TrimSpace(line)
+				job.LastActivity.Store(&trimmed)
+			}
 		}
 	}()
 	go func() {
