@@ -36,15 +36,16 @@ type Result struct {
 
 // Job is the unit of work submitted to the serial queue.
 type Job struct {
-	Ctx             context.Context
-	Workspace       string
-	BotName         string   // bot name, used as session key
-	ChatID          int64    // Telegram chat ID
-	TopicID         int      // Telegram topic ID (forum thread); 0 means regular chat
-	Prompt          string
-	Mode            TaskMode
-	AnthropicAPIKeys []string // API keys to try in order; falls back to env ANTHROPIC_API_KEY if empty
-	ResultCh        chan<- Result // caller listens on this channel for the result
+	Ctx              context.Context
+	Workspace        string
+	BotName          string   // bot name, used as session key
+	ChatID           int64    // Telegram chat ID
+	TopicID          int      // Telegram topic ID (forum thread); 0 means regular chat
+	Prompt           string
+	Mode             TaskMode
+	AnthropicAPIKeys  []string                   // API keys to try in order; falls back to env ANTHROPIC_API_KEY if empty
+	ClaudeCredentials []config.ClaudeCredential  // OAuth credential sets; tried in order after API keys are exhausted
+	ResultCh         chan<- Result               // caller listens on this channel for the result
 }
 
 // claudeJSONOutput is the output structure of claude --output-format json.
@@ -166,10 +167,11 @@ func isKeyError(output string) bool {
 }
 
 // execute actually runs the claude CLI and returns the output.
-// Logic:
-//   - Known session → --output-format text --resume {sessionID}
-//   - No session (new) → --output-format json, parse session_id from JSON output and persist
-//   - If AnthropicAPIKeys is set, retries with the next key on rate-limit / quota / auth failures.
+// Attempt order on auth/rate failures:
+//  1. AnthropicAPIKeys (env-based auth) — tried in order
+//  2. ClaudeCredentials (OAuth file-based auth) — each swaps ~/.claude/.credentials.json and forces a new session
+//
+// If neither is configured, a single attempt is made using the existing env/credentials as-is.
 func (m *Manager) execute(job Job) Result {
 	sessionID := m.sessions.Get(job.Workspace, job.BotName, job.ChatID, job.TopicID)
 	isNewSession := sessionID == ""
@@ -201,23 +203,50 @@ func (m *Manager) execute(job Job) Result {
 	}
 	job.Prompt = prompt
 
-	// Determine which keys to try. If no keys configured, pass empty string (use env var as-is).
+	// --- Phase 1: API keys ---
+	// If no keys configured, one attempt with empty key (uses existing env/credentials file).
 	keys := job.AnthropicAPIKeys
 	if len(keys) == 0 {
 		keys = []string{""}
 	}
-
 	var lastResult Result
 	for i, key := range keys {
 		lastResult = m.executeWithKey(job, sessionID, isNewSession, key)
 		if lastResult.Err == nil {
 			return lastResult
 		}
-		// Only retry on key-related errors, and only if there are more keys to try
 		if i < len(keys)-1 && isKeyError(lastResult.Output+lastResult.Err.Error()) {
-			slog.Warn("key error detected, retrying with next key",
+			slog.Warn("key error, retrying with next API key",
 				"key_index", i, "err", lastResult.Err,
 				"workspace", job.Workspace, "chat_id", job.ChatID)
+			continue
+		}
+		break
+	}
+
+	// If the last API-key failure was not an auth/rate error, no point trying OAuth credentials.
+	if lastResult.Err != nil && !isKeyError(lastResult.Output+lastResult.Err.Error()) {
+		return lastResult
+	}
+
+	// --- Phase 2: Claude OAuth credentials ---
+	// Each credential swaps ~/.claude/.credentials.json and forces a new session
+	// (OAuth sessions are account-scoped; resuming across accounts is not supported).
+	for i, cred := range job.ClaudeCredentials {
+		if err := swapCredential(cred); err != nil {
+			slog.Warn("credential swap failed, skipping",
+				"cred_index", i, "err", err)
+			continue
+		}
+		slog.Info("retrying with Claude credential",
+			"cred_index", i, "workspace", job.Workspace, "chat_id", job.ChatID)
+		lastResult = m.executeWithKey(job, "", true, "") // force new session; no API key override
+		if lastResult.Err == nil {
+			return lastResult
+		}
+		if i < len(job.ClaudeCredentials)-1 && isKeyError(lastResult.Output+lastResult.Err.Error()) {
+			slog.Warn("credential auth error, retrying with next credential",
+				"cred_index", i, "err", lastResult.Err)
 			continue
 		}
 		break

@@ -13,13 +13,26 @@ import (
 	"github.com/spf13/viper"
 )
 
+// ClaudeCredential holds a single Claude OAuth credential set (claudeAiOauth).
+// Used for multi-account fallback: on rate-limit/auth failure, the runner swaps
+// ~/.claude/.credentials.json to the next credential and retries.
+type ClaudeCredential struct {
+	AccessToken      string   `mapstructure:"access_token"      json:"accessToken"`
+	RefreshToken     string   `mapstructure:"refresh_token"     json:"refreshToken"`
+	ExpiresAt        int64    `mapstructure:"expires_at"        json:"expiresAt,omitempty"`
+	Scopes           []string `mapstructure:"scopes"            json:"scopes,omitempty"`
+	SubscriptionType string   `mapstructure:"subscription_type" json:"subscriptionType,omitempty"`
+	RateLimitTier    string   `mapstructure:"rate_limit_tier"   json:"rateLimitTier,omitempty"`
+}
+
 // BotConfig holds configuration for a single Telegram Bot.
 type BotConfig struct {
-	Name                string   `mapstructure:"name"`
-	Token               string   `mapstructure:"token"`
-	AllowedUsers        []int64  `mapstructure:"allowed_users"`
-	OpenAIAPIKey        string   `mapstructure:"openai_api_key"`        // Whisper voice transcription; reads OPENAI_API_KEY env var if empty
-	AnthropicAPIKeys    []string `mapstructure:"anthropic_api_keys"`    // multiple keys tried in order; fallback on rate-limit/quota/auth errors
+	Name                string             `mapstructure:"name"`
+	Token               string             `mapstructure:"token"`
+	AllowedUsers        []int64            `mapstructure:"allowed_users"`
+	OpenAIAPIKey        string             `mapstructure:"openai_api_key"`        // Whisper voice transcription; reads OPENAI_API_KEY env var if empty
+	AnthropicAPIKeys    []string           `mapstructure:"anthropic_api_keys"`    // multiple keys tried in order; fallback on rate-limit/quota/auth errors
+	ClaudeCredentials   []ClaudeCredential `mapstructure:"claude_credentials"`   // OAuth credential sets for multi-account fallback
 	MemoryUpdateInterval   int `mapstructure:"memory_update_interval"`   // update memory.md every N successful completions; 0 = disabled
 	MemoryCompressInterval int `mapstructure:"memory_compress_interval"` // compress memory.md every N memory updates; 0 = disabled
 	MaxSessionTokens       int `mapstructure:"max_session_tokens"`       // reset session when input tokens exceed this; default 60000

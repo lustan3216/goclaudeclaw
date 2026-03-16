@@ -706,9 +706,10 @@ func (d *Dispatcher) dispatchJob(ctx context.Context, chatID int64, topicID int,
 			ChatID:           chatID,
 			TopicID:          topicID,
 			Prompt:           prompt,
-			Mode:             mode,
-			AnthropicAPIKeys: d.botCfg.AnthropicAPIKeys,
-			ResultCh:         resultCh,
+			Mode:              mode,
+			AnthropicAPIKeys:  d.botCfg.AnthropicAPIKeys,
+			ClaudeCredentials: d.botCfg.ClaudeCredentials,
+			ResultCh:          resultCh,
 		})
 
 		go func() {
@@ -770,9 +771,10 @@ func (d *Dispatcher) dispatchJob(ctx context.Context, chatID int64, topicID int,
 		ChatID:           chatID,
 		TopicID:          topicID,
 		Prompt:           prompt,
-		Mode:             mode,
-		AnthropicAPIKeys: d.botCfg.AnthropicAPIKeys,
-		ResultCh:         resultCh,
+		Mode:              mode,
+		AnthropicAPIKeys:  d.botCfg.AnthropicAPIKeys,
+		ClaudeCredentials: d.botCfg.ClaudeCredentials,
+		ResultCh:          resultCh,
 	})
 
 	// Renew typing every 4s until the result is ready
@@ -863,10 +865,11 @@ func (d *Dispatcher) maybeUpdateMemory(ctx context.Context, chatID int64, topicI
 		BotName:   d.botCfg.Name,
 		ChatID:    chatID,
 		TopicID:   topicID,
-		Prompt:           prompt,
-		Mode:             runner.ModeForeground,
-		AnthropicAPIKeys: d.botCfg.AnthropicAPIKeys,
-		ResultCh:         resultCh,
+		Prompt:            prompt,
+		Mode:              runner.ModeForeground,
+		AnthropicAPIKeys:  d.botCfg.AnthropicAPIKeys,
+		ClaudeCredentials: d.botCfg.ClaudeCredentials,
+		ResultCh:          resultCh,
 	})
 
 	// Discard result, log only; on success check if memory.md needs compression
@@ -913,10 +916,11 @@ func (d *Dispatcher) maybeCompressMemory(ctx context.Context, chatID int64, topi
 		BotName:   d.botCfg.Name,
 		ChatID:    chatID,
 		TopicID:   topicID,
-		Prompt:           prompt,
-		Mode:             runner.ModeForeground,
-		AnthropicAPIKeys: d.botCfg.AnthropicAPIKeys,
-		ResultCh:         resultCh,
+		Prompt:            prompt,
+		Mode:              runner.ModeForeground,
+		AnthropicAPIKeys:  d.botCfg.AnthropicAPIKeys,
+		ClaudeCredentials: d.botCfg.ClaudeCredentials,
+		ResultCh:          resultCh,
 	})
 
 	go func() {
@@ -966,10 +970,11 @@ func (d *Dispatcher) maybeSummarizeSession(ctx context.Context, chatID int64, to
 		BotName:   d.botCfg.Name,
 		ChatID:    chatID,
 		TopicID:   topicID,
-		Prompt:           prompt,
-		Mode:             runner.ModeForeground,
-		AnthropicAPIKeys: d.botCfg.AnthropicAPIKeys,
-		ResultCh:         resultCh,
+		Prompt:            prompt,
+		Mode:              runner.ModeForeground,
+		AnthropicAPIKeys:  d.botCfg.AnthropicAPIKeys,
+		ClaudeCredentials: d.botCfg.ClaudeCredentials,
+		ResultCh:          resultCh,
 	})
 
 	go func() {

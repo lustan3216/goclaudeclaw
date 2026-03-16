@@ -6,7 +6,20 @@
       "token": "TOKEN_1",
       "allowed_users": [123456789],
       "openai_api_key": "",
-      "anthropic_api_keys": ["sk-ant-key1", "sk-ant-key2"]
+      "anthropic_api_keys": ["sk-ant-key1", "sk-ant-key2"],
+      "claude_credentials": [
+        {
+          "access_token": "sk-ant-oat01-...",
+          "refresh_token": "sk-ant-ort01-...",
+          "expires_at": 0,
+          "scopes": ["user:inference"],
+          "subscription_type": "max"
+        },
+        {
+          "access_token": "sk-ant-oat01-...",
+          "refresh_token": "sk-ant-ort01-..."
+        }
+      ]
     },
     {
       "name": "work",
