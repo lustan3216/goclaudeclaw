@@ -847,7 +847,35 @@ func (d *Dispatcher) dispatchJob(ctx context.Context, chatID int64, topicID int,
 		}
 	}()
 
+	// Notify user if task runs longer than 20s, then every 60s after that
+	taskStart := time.Now()
+	longTaskDone := make(chan struct{})
+	go func() {
+		select {
+		case <-longTaskDone:
+			return
+		case <-jobCtx.Done():
+			return
+		case <-time.After(20 * time.Second):
+			d.replyTo(chatID, topicID, 0, "⏳ 還在跑，請稍候...")
+		}
+		ticker := time.NewTicker(60 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-longTaskDone:
+				return
+			case <-jobCtx.Done():
+				return
+			case <-ticker.C:
+				elapsed := int(time.Since(taskStart).Seconds())
+				d.replyTo(chatID, topicID, 0, fmt.Sprintf("⏳ 仍在執行中 (%ds)...", elapsed))
+			}
+		}
+	}()
+
 	result := <-resultCh
+	close(longTaskDone)
 	close(typingDone)
 
 	// Check cancellation BEFORE calling cleanup (which itself calls jobCancel).
