@@ -387,8 +387,8 @@ func (d *Dispatcher) handleCommand(ctx context.Context, msg *telego.Message, top
 			topicInfo = fmt.Sprintf("Topic #%d", topicID)
 		}
 		d.reply(chatID, topicID, fmt.Sprintf(
-			"Bot: %s\nWorkspace: %s\nSecurity: %s\nTopic: %s",
-			d.botCfg.Name, d.workspace, d.cfg.Security.Level, topicInfo,
+			"Bot: %s\nWorkspace: %s\nSecurity: %s\nTopic: %s\nVersion: %s",
+			d.botCfg.Name, d.workspace, d.cfg.Security.Level, topicInfo, buildinfo.Version,
 		))
 	case "bg":
 		// Force background mode
