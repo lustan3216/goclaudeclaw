@@ -479,6 +479,8 @@ func (m *Manager) executeWithKey(job Job, sessionID string, isNewSession bool, a
 				continue
 			}
 
+			slog.Debug("stream event", "type", evt.Type, "subtype", evt.Subtype, "has_message", len(evt.Message) > 0)
+
 			switch evt.Type {
 			case "system":
 				// init event carries session_id
@@ -500,6 +502,10 @@ func (m *Manager) executeWithKey(job Job, sessionID string, isNewSession bool, a
 									_ = json.Unmarshal(block.Input, &inp)
 									activeAgents[block.ID] = inp
 								}
+								slog.Info("tool_use detected",
+								"tool", block.Name,
+								"tool_use_id", block.ID,
+								"summary", summary)
 								if job.ToolEventCh != nil {
 									te := ToolEvent{
 										Type:      ToolStarted,
@@ -528,8 +534,10 @@ func (m *Manager) executeWithKey(job Job, sessionID string, isNewSession bool, a
 							if block.Type == "tool_result" && block.ToolUseID != "" {
 								toolName, ok := activeTools[block.ToolUseID]
 								if !ok {
+									slog.Debug("tool_result for unknown tool_use_id", "id", block.ToolUseID)
 									continue
 								}
+								slog.Info("tool_result detected", "tool", toolName, "tool_use_id", block.ToolUseID)
 								delete(activeTools, block.ToolUseID)
 								if job.ToolEventCh != nil {
 									te := ToolEvent{

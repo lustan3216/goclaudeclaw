@@ -838,6 +838,11 @@ func (d *Dispatcher) dispatchJob(ctx context.Context, chatID int64, topicID int,
 		var activities []toolActivity
 		var lastText string
 		for evt := range toolEventCh {
+			slog.Info("tool event received in dispatcher",
+				"type", evt.Type,
+				"tool", evt.ToolName,
+				"summary", evt.Summary,
+				"tool_use_id", evt.ToolUseID)
 			switch evt.Type {
 			case runner.ToolStarted:
 				activities = append(activities, toolActivity{
@@ -860,9 +865,14 @@ func (d *Dispatcher) dispatchJob(ctx context.Context, chatID int64, topicID int,
 				continue // 避免重复编辑相同内容
 			}
 			lastText = text
+			slog.Info("updating progress message",
+				"status_msg_id", statusMsgID,
+				"activities", len(activities),
+				"text_len", len(text))
 			if statusMsgID == 0 {
 				// 前台任务：首次工具事件时发送新消息
 				statusMsgID = d.replyTo(chatID, topicID, replyToID, text)
+				slog.Info("sent new progress message", "msg_id", statusMsgID)
 			} else {
 				// 编辑已有的状态消息
 				_, err := d.botAPI.EditMessageText(&telego.EditMessageTextParams{
