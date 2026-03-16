@@ -734,11 +734,14 @@ func (d *Dispatcher) dispatchJob(ctx context.Context, chatID int64, topicID int,
 		return
 	}
 
-	// Foreground: call onDone only on non-cancelled completion
+	// Foreground: call onDone only on non-cancelled completion.
+	// userCancelled is set to true only when the user explicitly cancels (reaction 😱/😭),
+	// NOT when cleanup() calls jobCancel() at the end of a normal run.
+	var userCancelled bool
 	if onDone != nil {
 		defer func() {
-			if jobCtx.Err() != nil {
-				// Cancelled — discard pending messages and release the queue
+			if userCancelled {
+				// User explicitly cancelled — discard pending messages and release the queue
 				d.drainPending(chatID, topicID)
 				return
 			}
@@ -804,6 +807,7 @@ func (d *Dispatcher) dispatchJob(ctx context.Context, chatID int64, topicID int,
 	// Check cancellation BEFORE calling cleanup (which itself calls jobCancel).
 	// If already cancelled (user reacted with 😱/😭), handleReactionCancel already sent a reply.
 	if jobCtx.Err() != nil {
+		userCancelled = true
 		cleanup()
 		return
 	}
