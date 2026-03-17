@@ -502,7 +502,7 @@ func (m *Manager) executeWithKey(job Job, sessionID string, isNewSession bool, a
 									_ = json.Unmarshal(block.Input, &inp)
 									activeAgents[block.ID] = inp
 								}
-								slog.Info("tool_use detected",
+								slog.Debug("tool_use detected",
 								"tool", block.Name,
 								"tool_use_id", block.ID,
 								"summary", summary)
@@ -537,7 +537,7 @@ func (m *Manager) executeWithKey(job Job, sessionID string, isNewSession bool, a
 									slog.Debug("tool_result for unknown tool_use_id", "id", block.ToolUseID)
 									continue
 								}
-								slog.Info("tool_result detected", "tool", toolName, "tool_use_id", block.ToolUseID)
+								slog.Debug("tool_result detected", "tool", toolName, "tool_use_id", block.ToolUseID)
 								delete(activeTools, block.ToolUseID)
 								if job.ToolEventCh != nil {
 									te := ToolEvent{
