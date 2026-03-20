@@ -96,6 +96,9 @@ type Dispatcher struct {
 	pendingMu    sync.Mutex
 	topicPending map[chatTopicKey]*topicQueue
 
+	summarizeMu    sync.Mutex
+	summarizeActive map[chatTopicKey]bool // 防止 summarize 循環觸發
+
 	runnerMgr  *runner.Manager
 	sessionMgr *session.Manager
 	cfg        *config.Config
@@ -119,6 +122,7 @@ func NewDispatcher(
 		completionCounts: make(map[chatTopicKey]int),
 		cancelReactions:  make(map[int]cancelEntry),
 		topicPending:     make(map[chatTopicKey]*topicQueue),
+		summarizeActive:  make(map[chatTopicKey]bool),
 		runnerMgr:        runnerMgr,
 		sessionMgr:       sessionMgr,
 		cfg:              cfg,
@@ -1250,6 +1254,19 @@ func (d *Dispatcher) maybeSummarizeSession(ctx context.Context, chatID int64, to
 		return
 	}
 
+	// 防止 summarize 循環：summarize 自身的回應也會觸發 token 檢查，
+	// 如果不擋住，會無限 summarize→check→summarize
+	key := chatTopicKey{chatID: chatID, topicID: topicID}
+	d.summarizeMu.Lock()
+	if d.summarizeActive[key] {
+		d.summarizeMu.Unlock()
+		slog.Info("summarize already in progress, skipping",
+			"chat_id", chatID, "topic_id", topicID)
+		return
+	}
+	d.summarizeActive[key] = true
+	d.summarizeMu.Unlock()
+
 	slog.Info("session token threshold exceeded, triggering summarize+reset",
 		"input_tokens", inputTokens, "max_session_tokens", maxTokens,
 		"chat_id", chatID, "topic_id", topicID)
@@ -1280,6 +1297,12 @@ func (d *Dispatcher) maybeSummarizeSession(ctx context.Context, chatID int64, to
 	})
 
 	go func() {
+		defer func() {
+			d.summarizeMu.Lock()
+			delete(d.summarizeActive, key)
+			d.summarizeMu.Unlock()
+		}()
+
 		result := <-resultCh
 		if result.Err != nil {
 			slog.Warn("conversation summarize failed, keeping original session", "err", result.Err, "chat_id", chatID, "topic_id", topicID)
