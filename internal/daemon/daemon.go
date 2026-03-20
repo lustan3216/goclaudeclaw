@@ -84,22 +84,34 @@ func isProcessRunning(pid int) bool {
 	return err == nil
 }
 
-// WaitForShutdown blocks until SIGINT or SIGTERM is received,
-// then calls cancel() to trigger the graceful shutdown flow.
-// Returns the received signal for the caller to log.
+// WaitForShutdown blocks until SIGINT/SIGTERM (shutdown) or SIGUSR1 (restart) is received.
+// On SIGUSR1, the process re-execs itself with the new binary (seamless zero-downtime upgrade).
+// On SIGINT/SIGTERM, calls cancel() to trigger graceful shutdown.
 func WaitForShutdown(cancel context.CancelFunc) os.Signal {
 	sigCh := make(chan os.Signal, 1)
-	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM, syscall.SIGUSR1)
 
 	sig := <-sigCh
+
+	if sig == syscall.SIGUSR1 {
+		slog.Info("SIGUSR1 received, re-execing with new binary...")
+		signal.Stop(sigCh)
+
+		exe, err := os.Executable()
+		if err != nil {
+			slog.Error("failed to resolve executable path, falling back to shutdown", "err", err)
+		} else {
+			// syscall.Exec 替换当前进程（同 PID），不会返回
+			if err := syscall.Exec(exe, os.Args, os.Environ()); err != nil {
+				slog.Error("syscall.Exec failed, falling back to shutdown", "err", err)
+			}
+		}
+		// 如果 exec 失败，走正常 shutdown
+	}
+
 	slog.Info("shutdown signal received, starting graceful shutdown", "signal", sig)
-
-	// Cancel root context to stop all child components
 	cancel()
-
-	// Stop signal listening to avoid blocking on a second signal
 	signal.Stop(sigCh)
-
 	return sig
 }
 
