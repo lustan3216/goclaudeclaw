@@ -11,8 +11,10 @@ import (
 	"os/exec"
 	"strings"
 	"sync"
+	"sync/atomic"
 
 	"github.com/lustan3216/claudeclaw/internal/config"
+	"github.com/lustan3216/claudeclaw/internal/daemon"
 	"github.com/lustan3216/claudeclaw/internal/memory"
 	"github.com/lustan3216/claudeclaw/internal/session"
 )
@@ -100,6 +102,7 @@ type Manager struct {
 	sessions   *session.Manager
 	cfg        *config.Config
 	claudePath string
+	activeJobs atomic.Int32 // number of currently executing CLI jobs
 }
 
 // NewManager creates a Runner Manager.
@@ -160,6 +163,7 @@ func (m *Manager) getOrCreateQueue(key queueKey) chan Job {
 // consuming jobs from the queue in order until the channel is closed.
 func (m *Manager) runQueue(key queueKey, q <-chan Job) {
 	for job := range q {
+		m.activeJobs.Add(1)
 		result := m.execute(job)
 		// Close agent event channel before sending result so dispatcher
 		// can drain all events before processing the final result.
@@ -168,6 +172,12 @@ func (m *Manager) runQueue(key queueKey, q <-chan Job) {
 		}
 		if job.ResultCh != nil {
 			job.ResultCh <- result
+		}
+		remaining := m.activeJobs.Add(-1)
+		// 所有 job 跑完后，如果有 pending restart，无缝切换到新 binary
+		if remaining == 0 && daemon.PendingRestart() {
+			slog.Info("all jobs complete, executing pending restart")
+			daemon.ReExec()
 		}
 	}
 }

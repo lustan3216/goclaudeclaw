@@ -10,8 +10,35 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"syscall"
 )
+
+// pendingRestart is set when SIGUSR1 is received.
+// The runner checks this after each job completion to do a seamless restart.
+var pendingRestart atomic.Bool
+
+// SetPendingRestart marks the daemon for restart after current jobs complete.
+func SetPendingRestart() { pendingRestart.Store(true) }
+
+// PendingRestart returns whether a restart is pending.
+func PendingRestart() bool { return pendingRestart.Load() }
+
+// ReExec replaces the current process with a new instance of the same binary.
+// Same PID, new binary — does not return on success.
+func ReExec() {
+	exe, err := os.Executable()
+	if err != nil {
+		slog.Error("ReExec: failed to resolve executable", "err", err)
+		return
+	}
+	// Linux /proc/self/exe appends " (deleted)" when binary was replaced on disk
+	exe = strings.TrimSuffix(exe, " (deleted)")
+	slog.Info("re-execing with new binary", "exe", exe)
+	if err := syscall.Exec(exe, os.Args, os.Environ()); err != nil {
+		slog.Error("ReExec: syscall.Exec failed", "err", err)
+	}
+}
 
 // PIDFile manages writing and cleanup of a PID file.
 type PIDFile struct {
@@ -94,22 +121,10 @@ func WaitForShutdown(cancel context.CancelFunc) os.Signal {
 	sig := <-sigCh
 
 	if sig == syscall.SIGUSR1 {
-		slog.Info("SIGUSR1 received, re-execing with new binary...")
-		signal.Stop(sigCh)
-
-		exe, err := os.Executable()
-		if err != nil {
-			slog.Error("failed to resolve executable path, falling back to shutdown", "err", err)
-		} else {
-			// Linux /proc/self/exe appends " (deleted)" when binary was replaced on disk
-			exe = strings.TrimSuffix(exe, " (deleted)")
-			slog.Info("re-execing", "exe", exe, "args", os.Args)
-			// syscall.Exec replaces the current process (same PID), does not return on success
-			if err := syscall.Exec(exe, os.Args, os.Environ()); err != nil {
-				slog.Error("syscall.Exec failed, falling back to shutdown", "err", err)
-			}
-		}
-		// 如果 exec 失败，走正常 shutdown
+		slog.Info("SIGUSR1 received, will restart after current jobs complete")
+		SetPendingRestart()
+		// 继续等待下一个信号（不退出，让 runner 在 job 完成后自动 re-exec）
+		sig = <-sigCh
 	}
 
 	slog.Info("shutdown signal received, starting graceful shutdown", "signal", sig)
